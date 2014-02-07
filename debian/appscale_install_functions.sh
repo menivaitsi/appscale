@@ -363,14 +363,14 @@ installmonit()
 
     # Next, monit won't start unless there's a config file that enables it,
     # so copy that over as well as our AppScale-specific monit file.
-#    cd ${APPSCALE_HOME}
-#    cp monit /etc/default/monit
-#    cp monitrc /etc/monitrc
-#    mkdir -p /etc/monit/conf.d
+    cd ${APPSCALE_HOME}
+    cp monit /etc/default/monit
+    cp monitrc /etc/monitrc
+    mkdir -p /etc/monit/conf.d
 
     # Finally, monit requires the monitrc file to be 0700, otherwise it won't
     # use it.
-#    chmod 0700 /etc/monitrc
+    chmod 0700 /etc/monitrc
 }
 
 installcassandra()
