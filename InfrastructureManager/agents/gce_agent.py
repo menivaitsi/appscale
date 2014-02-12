@@ -482,8 +482,9 @@ class GCEAgent(BaseAgent):
         'kind' : 'compute#attachedDisk',
         'type' : 'PERSISTENT',
         'mode' : 'READ_WRITE',
-        'source' : "https://www.googleapis.com/compute/v1/projects/{0}" \
-          "/zones/{1}/disks/{2}".format(project, zone, disk_name),
+        'source' : "https://www.googleapis.com/compute/{0}/projects/{1}" \
+          "/zones/{2}/disks/{3}".format(self.API_VERSION, project, 
+          zone, disk_name),
         'deviceName' : 'sdb'
       }
     )
