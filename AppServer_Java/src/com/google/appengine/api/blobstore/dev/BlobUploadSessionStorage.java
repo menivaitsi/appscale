@@ -51,20 +51,26 @@ public final class BlobUploadSessionStorage
          * AppScale - added NGINX success path to entity
          */
 
-        String path = "http://" + System.getProperty("NGINX_ADDR") + ":" + System.getProperty("NGINX_PORT") + session.getSuccessPath();
+        String path = session.getSuccessPath(); //server address and port removed as UploadBlobServlet uses ServletContext.getRequestDispatcher() to do a redirect. This cannot use a server address and must start with /. Using the server address resulted in null pointer exception
         logger.fine("success path has been set as [" + path + "]");
         entity.setProperty(SUCCESS_PATH, path);
         entity.setProperty("creation", time);
         entity.setProperty("user", user);
         entity.setProperty("state", "init");
         this.datastoreService.put(entity);
-
-        return KeyFactory.keyToString(entity.getKey());
+		
+		String sessionId = KeyFactory.keyToString(entity.getKey());
+		logger.finer("Created new sessionId [" + sessionId + "]");
+        return sessionId;
     }
 
-    public BlobUploadSession loadSession( String sessionId )
+    public BlobUploadSession loadSession( String sessionIdPath )
     {
-        logger.fine("loadSession called with sessionId [" + sessionId + "]");
+        logger.fine("loadSession called with sessionIdPath [" + sessionIdPath + "]");
+		
+		//extract sessionId from path
+		String sessionId = getSessionId(sessionIdPath);
+		
         try
         {
             return convertFromEntity(this.datastoreService.get(getKeyForSession(sessionId)));
@@ -76,10 +82,41 @@ public final class BlobUploadSessionStorage
         return null;
     }
 
-    public void deleteSession( String sessionId )
+    public void deleteSession( String sessionIdPath )
     {
+        logger.fine("deleteSession called with sessionIdPath [" + sessionIdPath + "]");
+		
+		//extract sessionId from path
+		String sessionId = getSessionId(sessionIdPath);
+		
         this.datastoreService.delete(new Key[] { getKeyForSession(sessionId) });
     }
+	
+	/**
+	 * Google's UploadBlobServlet returns the request path as the session id.
+	 *  In AppScale this means that the the id can include the app path and end 
+	 *  up like "app-prod/agxiYXJyZWxkLXByb2RyGwsSFV9fQmxvYlVwbG9hZFNlc3Npb25fXxgEDA"
+	 *  instead of just "agxiYXJyZWxkLXByb2RyGwsSFV9fQmxvYlVwbG9hZFNlc3Npb25fXxgEDA". 
+	 * This method will extract the session id from the path
+	 * @param sessionIdPath
+	 * @return
+	 */
+	private String getSessionId(String sessionIdPath)
+	{
+		if(sessionIdPath == null)
+		{
+			return null;
+		}
+	
+		String[] parts = sessionIdPath.split("/");
+		if(parts != null && parts.length > 0)
+		{
+			return parts[parts.length - 1];
+		} else
+		{
+			return null;
+		}
+	}
 
     private BlobUploadSession convertFromEntity( Entity entity )
     {
