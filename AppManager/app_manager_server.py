@@ -466,6 +466,12 @@ def create_java_start_cmd(app_name,
              "--port=" + str(port),
              #this jvm flag allows javax.email to connect to the smtp server
              "--jvm_flag=-Dsocket.permit_connect=true",
+
+             # Custom JVM options. Such options will be passed in via the AppScalefile in a future release.
+             "--jvm_flag=-Xmx1024m",
+             "--jvm_flag=-Xms256m",
+             "--jvm_flag=-XX:MaxPermSize=384m",
+
              "--disable_update_check",
              "--address=" + appscale_info.get_private_ip(),
              "--datastore_path=" + db_location,
