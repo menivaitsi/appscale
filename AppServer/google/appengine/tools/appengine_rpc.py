@@ -589,9 +589,9 @@ class AbstractRpcServer(object):
                                             "HOSTED")
               self._Authenticate()
             elif auth_domain == 'appscale':
-              loc = urlparse.urlparse(loc)
-              self.scheme = loc.scheme
-              self.host = loc.netloc
+#              loc = urlparse.urlparse(loc)
+#              self.scheme = loc.scheme
+#              self.host = loc.netloc
               self._AppScaleAuthenticate()
             elif loc.startswith("http://%s/_ah/login" % (self.host,)):
               self._DevAppServerAuthenticate()
