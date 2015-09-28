@@ -108,6 +108,7 @@ _DEVAPPSERVER2_PATHS = _STUB_DEPENDENCIES + [
 
     os.path.join(_DIR_PATH, 'lib', 'concurrent'),
     os.path.join(_DIR_PATH, 'lib', 'cherrypy'),
+    os.path.join(_DIR_PATH, 'lib', 'endpoints-1.0'),
     os.path.join(_DIR_PATH, 'lib', 'jinja2-2.6'),
     os.path.join(_DIR_PATH, 'lib', 'webob-1.2.3'),
     os.path.join(_DIR_PATH, 'lib', 'webapp2-2.5.1'),
