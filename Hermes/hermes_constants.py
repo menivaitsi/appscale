@@ -30,7 +30,7 @@ HERMES_URL = "http://localhost:{0}".format(HERMES_PORT)
 HTTPError = 'HTTPError'
 
 # The interval between polls for new tasks.
-POLLING_INTERVAL = 60000
+POLLING_INTERVAL = 5*60*1000   # 5 minutes.
 
 # The AppScale Portal URL for getting new tasks.
 PORTAL_URL = "https://portal.appscale.com"
