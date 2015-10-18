@@ -10,7 +10,7 @@ BR_SERVICE_PATH = "/"
 DB_MASTER_OBJECT_NAME = '/cassandra/db_master.tar.gz'
 
 # Enable DEBUG logging.
-DEBUG = False
+DEBUG = True
 
 # The suffix for backup files from a DB slave node.
 # The slave ID is populated at runtime.
@@ -33,7 +33,7 @@ HTTPError = 'HTTPError'
 POLLING_INTERVAL = 5*60*1000   # 5 minutes.
 
 # The AppScale Portal URL for getting new tasks.
-PORTAL_URL = "https://portal.appscale.com"
+PORTAL_URL = "https://192.168.102.239"
 
 # The AppScale Portal path for getting new tasks.
 PORTAL_POLL_PATH = "/get_appscale_task"
