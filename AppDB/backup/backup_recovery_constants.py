@@ -3,6 +3,12 @@
 # Location where we place the tar of the snapshot.
 BACKUP_DIR_LOCATION = "/opt/appscale/backups"
 
+# Location where we place the source code tars.
+APP_BACKUP_DIR_LOCATION = "{0}/apps".format(BACKUP_DIR_LOCATION)
+
+# Location where deployed app source code resides in an AppScale deployment.
+APP_DIR_LOCATION = "/opt/appscale/apps"
+
 # A suffix appended to an existing backup tar (for rollback purposes).
 BACKUP_ROLLBACK_SUFFIX = "_last_successful"
 
@@ -31,7 +37,7 @@ TMP_ZOOKEEPER_BACKUP = "{0}/zookeeper_backup".format(
   BACKUP_DIR_LOCATION)
 
 # Zookeeper paths that are not considered while taking a backup.
-ZK_IGNORE_PATHS = ['/appcontroller', '/deployment_id', '/zookeeper']
+ZK_IGNORE_PATHS = ['/appcontroller', '/appscale/deployment_id', '/zookeeper']
 
 # Zookeeper top level path.
 ZK_TOP_LEVEL = "/"

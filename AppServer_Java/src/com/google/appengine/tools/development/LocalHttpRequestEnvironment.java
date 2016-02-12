@@ -34,9 +34,9 @@ public class LocalHttpRequestEnvironment extends LocalEnvironment
     private String                                    DEVEL_FAKE_IS_ADMIN_RAW_HEADER = "X-AppEngine-Fake-Is-Admin";
     private String                                    DEVEL_PAYLOAD_RAW_HEADER = "HTTP_X_APPENGINE_DEVELOPMENT_PAYLOAD";
 
-     public LocalHttpRequestEnvironment(String appId, String serverName, String majorVersionId, int instance, HttpServletRequest request, Long deadlineMillis, ServersFilterHelper serversFilterHelper)
+     public LocalHttpRequestEnvironment(String appId, String serverName, String majorVersionId, int instance, Integer port, HttpServletRequest request, Long deadlineMillis, ModulesFilterHelper modulesFilterHelper)
      {
-        super(appId, majorVersionId, deadlineMillis);
+    	super(appId, serverName, majorVersionId, instance, port, deadlineMillis);
 
         this.loginCookieData = LoginCookieUtils.getCookieData(request);
         this.FORCE_ADMIN = checkForceAdmin(request);
@@ -89,7 +89,7 @@ public class LocalHttpRequestEnvironment extends LocalEnvironment
         }
 
         this.attributes.put("com.google.appengine.http_servlet_request", request);
-        this.attributes.put("com.google.appengine.tools.development.servers_filter_helper", serversFilterHelper);
+        this.attributes.put(DevAppServerImpl.MODULES_FILTER_HELPER_PROPERTY, modulesFilterHelper);
     }
 
     public boolean isLoggedIn()

@@ -8,6 +8,7 @@ require 'fileutils'
 require 'openssl'
 require 'socket'
 require 'timeout'
+require 'tmpdir'
 
 
 # Imports for RubyGems
@@ -131,6 +132,14 @@ module HelperFunctions
   RESOLV_CONF = "/etc/resolv.conf"
 
 
+  # The proc file to use to read the load of the system.
+  PROC_LOAD_FILE = "/proc/loadavg"
+
+
+  # The proc file to use to read memory installed.
+  PROC_MEM_FILE = "/proc/meminfo"
+
+
   def self.shell(cmd)
     return `#{cmd}`
   end
@@ -166,7 +175,7 @@ module HelperFunctions
 
   # Extracts the version from the VERSION file.
   def self.get_appscale_version
-    version_contents = self.read_file(APPSCALE_HOME + '/VERSION')
+    version_contents = self.read_file(APPSCALE_CONFIG_DIR + '/VERSION')
     version_line = version_contents[/AppScale version (.*)/]
     version_line.sub! 'AppScale version', ''
     return version_line.strip()
@@ -222,32 +231,34 @@ module HelperFunctions
       return if HelperFunctions.is_port_open?(ip, port, use_ssl)
 
       Kernel.sleep(sleep_time)
-      total_time_slept += sleep_time
-      if sleep_time < 30
-        sleep_time *= 2
+      if total_time_slept % 5 == 0
+        Djinn.log_debug("Waiting on #{ip}:#{port} to be open (currently closed).")
       end
+      total_time_slept += sleep_time
 
       if !timeout.nil? and total_time_slept > timeout
-        raise Exception.new("Waited too long for #{ip}#{port} to open!")
+        raise Exception.new("Waited too long for #{ip}:#{port} to open!")
       end
-
-      Djinn.log_debug("Waiting on #{ip}:#{port} to be open (currently closed).")
     }
   end
 
 
-  def self.sleep_until_port_is_closed(ip, port, use_ssl=DONT_USE_SSL)
+  def self.sleep_until_port_is_closed(ip, port, use_ssl=DONT_USE_SSL, timeout=nil)
+    total_time_slept = 0
     sleep_time = 1
 
     loop {
       return unless HelperFunctions.is_port_open?(ip, port, use_ssl)
 
       Kernel.sleep(sleep_time)
-      if sleep_time < 30
-        sleep_time *= 2
+      if total_time_slept % 5 == 0
+        Djinn.log_debug("Waiting on #{ip}:#{port} to be closed (currently open).")
       end
+      total_time_slept += sleep_time
 
-      Djinn.log_debug("Waiting on #{ip}:#{port} to be closed (currently open).")
+      if !timeout.nil? and total_time_slept > timeout
+        raise Exception.new("Waited too long for #{ip}:#{port} to close!")
+      end
     }
   end
 
@@ -292,21 +303,15 @@ module HelperFunctions
     
     remote_cmd = "ssh -i #{public_key_loc} -o StrictHostkeyChecking=no root@#{ip} '#{command} "
     
-    output_file = "/tmp/#{ip}.log"
     if want_output
-      remote_cmd << "2>&1 > #{output_file} &' &"
+      remote_cmd << "2>&1'"
     else
       remote_cmd << "> /dev/null &' &"
     end
 
     Djinn.log_debug("Running [#{remote_cmd}]")
 
-    if want_output
-      return self.shell("#{remote_cmd}")
-    else
-      Kernel.system(remote_cmd)
-      return remote_cmd
-    end
+    return self.shell("#{remote_cmd}")
   end
 
 
@@ -346,7 +351,7 @@ module HelperFunctions
     private_key_loc = File.expand_path(private_key_loc)
     FileUtils.chmod(CHMOD_READ_ONLY, private_key_loc)
     local_file_loc = File.expand_path(local_file_loc)
-    retval_file = "#{APPSCALE_CONFIG_DIR}/retval-#{Kernel.rand()}"
+    retval_file = "#{Dir.tmpdir}/retval-#{Kernel.rand()}"
     cmd = "scp -i #{private_key_loc} -o StrictHostkeyChecking=no 2>&1 #{local_file_loc} root@#{target_ip}:#{remote_file_loc}; echo $? > #{retval_file}"
     scp_result = self.shell(cmd)
 
@@ -449,7 +454,8 @@ module HelperFunctions
     self.shell("touch #{meta_dir}/log/server.log")
 
     if untar
-      self.shell("tar --file #{tar_path} --force-local -C #{tar_dir} -zx")
+      self.shell("tar --file #{tar_path} --force-local --no-same-owner " +
+        "-C #{tar_dir} -zx")
     end
   end
 
@@ -633,75 +639,6 @@ module HelperFunctions
   end
 
 
-  def self.set_options_in_env(options, cloud_num)
-    ENV['EC2_JVM_ARGS'] = nil
-
-    options.each_pair { |k, v|
-      next unless k =~ /\ACLOUD/
-      env_key = k.scan(/\ACLOUD_(.*)\Z/).flatten.to_s
-      ENV[env_key] = v
-    }
-
-    # note that key and cert vars are set wrong - they refer to
-    # the location on the user's machine where the key is
-    # thus, let's fix that
-
-    cloud_keys_dir = File.expand_path("#{APPSCALE_HOME}/.appscale/keys/cloud#{cloud_num}")
-    ENV['EC2_PRIVATE_KEY'] = "#{cloud_keys_dir}/mykey.pem"
-    ENV['EC2_CERT'] = "#{cloud_keys_dir}/mycert.pem"
-
-    Djinn.log_debug("Setting private key to #{cloud_keys_dir}/mykey.pem, cert to #{cloud_keys_dir}/mycert.pem")
-  end
-
-  def self.spawn_hybrid_vms(options, nodes)
-    info = "Spawning hybrid vms with options #{self.obscure_options(options).inspect} and nodes #{nodes.inspect}"
-    Djinn.log_debug(info)
-
-    cloud_info = []
-
-    cloud_num = 1
-    loop {
-      cloud_type = options["CLOUD#{cloud_num}_TYPE"]
-      break if cloud_type.nil?
-
-      self.set_options_in_env(options, cloud_num)
-
-      if cloud_type == "euca"
-        machine = options["CLOUD#{cloud_num}_EMI"]
-      elsif cloud_type == "ec2"
-        machine = options["CLOUD#{cloud_num}_AMI"]
-      else
-        self.log_and_crash("Cloud type was #{cloud_type}, which is not a supported value.")
-      end
-
-      num_of_vms = 0
-      jobs_needed = []
-      nodes.each_pair { |k, v|
-        if k =~ /\Acloud#{cloud_num}-\d+\Z/
-          num_of_vms += 1
-          jobs_needed << v
-        end
-      }
-
-      instance_type = "m1.large"
-      keyname = options["keyname"]
-      cloud = "cloud#{cloud_num}"
-      group = options["group"]
-
-      this_cloud_info = self.spawn_vms(num_of_vms, jobs_needed, machine, 
-        instance_type, keyname, cloud_type, cloud, group)
-
-      Djinn.log_debug("Cloud#{cloud_num} reports the following info: #{this_cloud_info.join(', ')}")
-
-      cloud_info += this_cloud_info
-      cloud_num += 1
-    }
-
-    Djinn.log_debug("Hybrid cloud spawning reports the following info: #{cloud_info.join(', ')}")
-
-    return cloud_info
-  end
-
   def self.spawn_vms(num_of_vms_to_spawn, job, image_id, instance_type, keyname,
     infrastructure, cloud, group, spot=false)
 
@@ -709,7 +646,7 @@ module HelperFunctions
 
     return [] if num_of_vms_to_spawn < 1
 
-    ssh_key = File.expand_path("#{APPSCALE_HOME}/.appscale/keys/#{cloud}/#{keyname}.key")
+    ssh_key = File.expand_path("#{APPSCALE_CONFIG_DIR}/keys/#{cloud}/#{keyname}.key")
     Djinn.log_debug("About to spawn VMs, expecting to find a key at #{ssh_key}")
 
     self.log_obscured_env
@@ -885,27 +822,6 @@ module HelperFunctions
     self.shell("#{infrastructure}-terminate-instances #{instances.join(' ')}")
   end
 
-  def self.terminate_hybrid_vms(options)
-    # TODO: kill my own cloud last
-    # otherwise could orphan other clouds
-
-    cloud_num = 1
-    loop {
-      key = "CLOUD#{cloud_num}_TYPE"
-      cloud_type = options[key]
-      break if cloud_type.nil?
-
-      self.set_options_in_env(options, cloud_num)
-
-      keyname = options["keyname"]
-      Djinn.log_debug("Killing Cloud#{cloud_num}'s machines, of type #{cloud_type} and with keyname #{keyname}")
-      self.terminate_all_vms(cloud_type, keyname)
-
-      cloud_num += 1
-    }
-
-  end
-  
   def self.terminate_all_vms(infrastructure, keyname)
     self.log_obscured_env
     desc_instances = `#{infrastructure}-describe-instances`
@@ -931,7 +847,10 @@ module HelperFunctions
     }
 
     usage['cpu'] /= self.get_num_cpus()
+    usage['num_cpu'] = self.get_num_cpus()
     usage['disk'] = (`df /`.scan(/(\d+)%/) * "").to_i
+    usage['load'] = self.get_avg_load()
+    usage['free_mem'] = ((100 - Integer(Float(usage['mem']).truncate())) * self.get_total_mem()) / 100
 
     return usage
   end
@@ -1018,7 +937,14 @@ module HelperFunctions
     locations = Array.new()
     Dir["#{untar_dir}/**/"].each { |path| locations.push(path) if path =~ /^#{untar_dir}\/(.*\/)*WEB-INF\/$/ }
     if !locations.empty?
-      return locations.sort_by{|s| s.length}[0]
+      sorted_locations = locations.sort()
+      location_to_use = sorted_locations[0]
+      sorted_locations.each{ |location|
+        if location.length() < location_to_use.length()
+          location_to_use = location
+        end
+      }
+      return location_to_use
     else
       return ""
     end
@@ -1368,6 +1294,14 @@ module HelperFunctions
     Djinn.log_debug(env)
   end
 
+  def self.get_avg_load()
+    return IO.read(PROC_LOAD_FILE).split[0].to_i
+  end
+
+  def self.get_total_mem()
+    return (IO.read(PROC_MEM_FILE).split[1].to_i / 1024)
+  end
+
   def self.get_num_cpus()
     return Integer(`cat /proc/cpuinfo | grep 'processor' | wc -l`.chomp)
   end
@@ -1495,11 +1429,17 @@ module HelperFunctions
   #   message: A String that indicates why the AppController is crashing.
   # Raises:
   #   SystemExit: Always occurs, since this method crashes the AppController.
-  def self.log_and_crash(message)
+  def self.log_and_crash(message, sleep=nil)
     self.write_file(APPCONTROLLER_CRASHLOG_LOCATION, Time.new.to_s + ": " +
       message)
     # Try to also log to the normal log file.
     Djinn.log_error("FATAL: #{message}")
+
+    # If asked for, wait for a while before crashing. This will help the
+    # tools to collect the status report or crashlog.
+    if !sleep.nil?
+      Kernel.sleep(sleep)
+    end
     abort(message)
   end
 

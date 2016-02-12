@@ -1,5 +1,6 @@
 """ Top level server for backup and recovery. """
 
+import json
 import logging
 
 import tornado.httpserver
@@ -20,6 +21,10 @@ class MainHandler(tornado.web.RequestHandler):
     """ Class for initializing backup/recovery web handler. """
     self.backup_recovery_service = backup_recovery_service
 
+  def get(self):
+    """ A GET handler for requests to this server. """
+    self.write(json.dumps({'status': 'up'}))
+
   @tornado.web.asynchronous
   def post(self):
     """ A POST handler for request to this server. """
@@ -39,7 +44,9 @@ def get_application():
     (r"/?", MainHandler, dict(backup_recovery_service=BackupService())),
     ], )
 
-if __name__ == "__main__":
+def main():
+  """ Main. """
+
   logging.getLogger().setLevel(logging.INFO)
   logging.info("Starting server on port {0}".format(DEFAULT_PORT))
 
@@ -53,3 +60,6 @@ if __name__ == "__main__":
   http_server.bind(DEFAULT_PORT)
   http_server.start(0)
   tornado.ioloop.IOLoop.instance().start()
+
+if __name__ == "__main__":
+  main()

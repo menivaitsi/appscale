@@ -15,6 +15,9 @@ APPSCALE_DATA_DIR = '/opt/appscale/'
 # Location of Java AppServer.
 JAVA_APPSERVER = APPSCALE_HOME + '/AppServer_Java'
 
+# The location of the file which specifies the public IP of the head node..
+LOGIN_IP_LOC = '/etc/appscale/login_ip'
+
 # The location of the file which specifies the current private IP.
 PRIVATE_IP_LOC = '/etc/appscale/my_private_ip'
 
@@ -77,4 +80,3 @@ RESERVED_APP_IDS = [DASHBOARD_APP_ID]
 
 # Location of where the search service is running.
 SEARCH_FILE_LOC = "/etc/appscale/search_ip"
-

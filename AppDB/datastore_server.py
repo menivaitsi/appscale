@@ -15,6 +15,7 @@ import md5
 import os
 import random
 import sys
+import threading
 import time
 
 import tornado.httpserver
@@ -48,6 +49,8 @@ from google.appengine.runtime import apiproxy_errors
 from google.appengine.ext import db
 from google.appengine.ext.db.metadata import Namespace
 from google.appengine.ext.remote_api import remote_api_pb
+
+from google.net.proto.ProtocolBuffer import ProtocolBufferDecodeError
 
 from M2Crypto import SSL
 
@@ -118,6 +121,130 @@ def reference_property_to_reference(refprop):
   return ref
 
 
+class UnprocessedQueryResult(datastore_pb.QueryResult):
+  """ A QueryResult that avoids decoding and re-encoding results.
+
+  This is only meant as a faster container for returning results from
+  datastore queries. Since it does not process or check results in any way,
+  it is not safe to use as a general purpose QueryResult replacement.
+  """
+  def __init__(self, contents=None):
+    """ Initializes an UnprocessedQueryResult object.
+
+    Args:
+      contents: An optional string to initialize a QueryResult object.
+    """
+    datastore_pb.QueryResult.__init__(self, contents=contents)
+    self.binary_results_ = []
+
+  def result_list(self):
+    """ Returns a reference to the stored list of results.
+
+    Unlike the original function, this returns the binary results instead of
+    the decoded results.
+    """
+    return self.binary_results_
+
+  def OutputUnchecked(self, out):
+    """ Encodes QueryResult object and outputs it to a buffer object.
+
+    This is called during the Encode process. The only difference from the
+    original function is outputting the binary results instead of encoding
+    result objects.
+
+    Args:
+      out: A buffer object to store the output.
+    """
+    if (self.has_cursor_):
+      out.putVarInt32(10)
+      out.putVarInt32(self.cursor_.ByteSize())
+      self.cursor_.OutputUnchecked(out)
+    for i in xrange(len(self.binary_results_)):
+      out.putVarInt32(18)
+      out.putVarInt32(len(self.binary_results_[i]))
+      out.buf.fromstring(self.binary_results_[i])
+    out.putVarInt32(24)
+    out.putBoolean(self.more_results_)
+    if (self.has_keys_only_):
+      out.putVarInt32(32)
+      out.putBoolean(self.keys_only_)
+    if (self.has_compiled_query_):
+      out.putVarInt32(42)
+      out.putVarInt32(self.compiled_query_.ByteSize())
+      self.compiled_query_.OutputUnchecked(out)
+    if (self.has_compiled_cursor_):
+      out.putVarInt32(50)
+      out.putVarInt32(self.compiled_cursor_.ByteSize())
+      self.compiled_cursor_.OutputUnchecked(out)
+    if (self.has_skipped_results_):
+      out.putVarInt32(56)
+      out.putVarInt32(self.skipped_results_)
+    for i in xrange(len(self.index_)):
+      out.putVarInt32(66)
+      out.putVarInt32(self.index_[i].ByteSize())
+      self.index_[i].OutputUnchecked(out)
+    if (self.has_index_only_):
+      out.putVarInt32(72)
+      out.putBoolean(self.index_only_)
+    if (self.has_small_ops_):
+      out.putVarInt32(80)
+      out.putBoolean(self.small_ops_)
+
+
+class UnprocessedQueryCursor(appscale_stub_util.QueryCursor):
+  """ A QueryCursor that takes encoded entities.
+
+  This is only meant to accompany the UnprocessedQueryResult class.
+  """
+  def __init__(self, query, binary_results, last_entity):
+    """ Initializes an UnprocessedQueryCursor object.
+
+    Args:
+      query: A query protocol buffer object.
+      binary_results: A list of strings that contain encoded protocol buffer
+        results.
+      last_entity: A string that contains the last entity. It is used to
+        generate the cursor, and it can be defined even if there are no
+        results.
+    """
+    self.__binary_results = binary_results
+    self.__query = query
+    self.__last_ent = last_entity
+    if len(binary_results) > 0:
+      # _EncodeCompiledCursor just uses the last entity.
+      results = [entity_pb.EntityProto(binary_results[-1])]
+    else:
+      results = []
+    super(UnprocessedQueryCursor, self).__init__(query, results, last_entity)
+
+  def PopulateQueryResult(self, count, offset, result):
+    """ Populates a QueryResult object with results the QueryCursor has been
+    storing.
+
+    Args:
+      count: The number of results requested in the query.
+      offset: The number of results to skip.
+      result: A QueryResult object to populate.
+    """
+    result.set_skipped_results(min(count, offset))
+    result_list = result.result_list()
+    if self.__binary_results:
+      if self.__query.keys_only():
+        for binary_result in self.__binary_results:
+          entity = entity_pb.EntityProto(binary_result)
+          entity.clear_property()
+          entity.clear_raw_property()
+          result_list.append(entity.Encode())
+      else:
+        result_list.extend(self.__binary_results)
+    else:
+      result_list = []
+    result.set_keys_only(self.__query.keys_only())
+    result.set_more_results(offset < count)
+    if self.__binary_results or self.__last_ent:
+      self._EncodeCompiledCursor(result.mutable_compiled_cursor())
+
+
 class DatastoreDistributed():
   """ AppScale persistent layer for the datastore API. It is the 
       replacement for the AppServers to persist their data into 
@@ -165,7 +292,17 @@ class DatastoreDistributed():
   # register.
   _MAX_NUM_INDEXES = dbconstants.MAX_NUMBER_OF_COMPOSITE_INDEXES
 
-  def __init__(self, datastore_batch, zookeeper=None):
+  # The position of the prop name when splitting an index entry by the
+  # delimiter.
+  PROP_NAME_IN_SINGLE_PROP_INDEX = 3
+
+  # The cassandra index column that stores the reference to the entity.
+  INDEX_REFERENCE_COLUMN = 'reference'
+
+  # The number of entities to fetch at a time when updating indices.
+  BATCH_SIZE = 100
+
+  def __init__(self, datastore_batch, zookeeper=None, debug=False):
     """
        Constructor.
      
@@ -175,6 +312,8 @@ class DatastoreDistributed():
     """
     logging.basicConfig(format='%(asctime)s %(levelname)s %(filename)s:' \
       '%(lineno)s %(message)s ', level=logging.ERROR)
+    if debug:
+      logging.getLogger().setLevel(logging.DEBUG)
     logging.debug("Started logging")
 
     # datastore accessor used by this class to do datastore operations.
@@ -1013,6 +1152,56 @@ class DatastoreDistributed():
                                           dbconstants.METADATA_SCHEMA, 
                                           row_values)    
     return rand 
+
+  def update_composite_index(self, app_id, index):
+    """ Updates an index for a given app ID.
+
+    Args:
+      app_id: A string containing the app ID.
+      index: An entity_pb.CompositeIndex object.
+    """
+    logging.info('Updating index: {}'.format(index))
+    entries_updated = 0
+    entity_type = index.definition().entity_type()
+
+    # TODO: Adjust prefix based on ancestor.
+    prefix = '{app}{delimiter}{entity_type}{kind_separator}'.format(
+      app=app_id,
+      delimiter=self._SEPARATOR * 2,
+      entity_type=entity_type,
+      kind_separator=dbconstants.KIND_SEPARATOR,
+    )
+    start_row = prefix
+    end_row = prefix + self._TERM_STRING
+    start_inclusive = True
+
+    while True:
+      # Fetch references from the kind table since entity keys can have a
+      # parent prefix.
+      references = self.datastore_batch.range_query(
+        table_name=dbconstants.APP_KIND_TABLE,
+        column_names=dbconstants.APP_KIND_SCHEMA,
+        start_key=start_row,
+        end_key=end_row,
+        limit=self.BATCH_SIZE,
+        offset=0,
+        start_inclusive=start_inclusive,
+      )
+
+      pb_entities = self.__fetch_entities(references, app_id)
+      entities = [entity_pb.EntityProto(entity) for entity in pb_entities]
+
+      self.insert_composite_indexes(entities, [index])
+      entries_updated += len(entities)
+
+      # If we fetched fewer references than we asked for, we're done.
+      if len(references) < self.BATCH_SIZE:
+        break
+
+      start_row = references[-1].keys()[0]
+      start_inclusive = self._DISABLE_INCLUSIVITY
+
+    logging.info('Updated {} index entries.'.format(entries_updated))
 
   def allocate_ids(self, app_id, size, max_id=None, num_retries=0):
     """ Allocates IDs from either a local cache or the datastore. 
@@ -3183,9 +3372,11 @@ class DatastoreDistributed():
     value = ''
     index_value = ""
     equality_value = ""
-    oper = datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL
     direction = datastore_pb.Query_Order.ASCENDING
     for prop in definition.property_list():
+      # Choose the least restrictive operation by default.
+      oper = datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL
+
       # The last property dictates the direction.
       if prop.has_direction():
         direction = prop.direction()
@@ -3262,7 +3453,7 @@ class DatastoreDistributed():
       if direction == datastore_pb.Query_Order.DESCENDING:
         start_value = equality_value
         end_value = index_value + self._TERM_STRING
-    elif oper  == datastore_pb.Query_Filter.EQUAL:
+    elif oper == datastore_pb.Query_Filter.EQUAL:
       if value == "":
         start_value = index_value
         end_value = index_value + self.MIN_INDEX_VALUE + self._TERM_STRING
@@ -3653,10 +3844,30 @@ class DatastoreDistributed():
       if definition.ancestor() == 1:
         ancestor = tokens.pop(0)[:-1]
       distinct_str = ""
+      value_index = 0
       for def_prop in definition.property_list():
-        value = tokens.pop(0) 
+        # If the value contained the separator, try to recover the value.
+        if len(tokens[:-1]) > len(definition.property_list()):
+          end_slice = value_index + 1
+          while end_slice <= len(tokens[:-1]):
+            value = self._SEPARATOR.join(tokens[value_index:end_slice])
+            if def_prop.direction() == entity_pb.Index_Property.DESCENDING:
+              value = helper_functions.reverse_lex(value)
+            prop_value = entity_pb.PropertyValue()
+            try:
+              self.__decode_index_str(value, prop_value)
+              value_index = end_slice
+              break
+            except ProtocolBufferDecodeError:
+              end_slice += 1
+        else:
+          value = tokens[value_index]
+          if def_prop.direction() == entity_pb.Index_Property.DESCENDING:
+            value = helper_functions.reverse_lex(value)
+          value_index += 1
+
         if def_prop.name() not in prop_name_list:
-          logging.warning("Skipping prop in projection: {0}".format(
+          logging.debug("Skipping prop in projection: {0}".format(
             def_prop.name()))
           continue
 
@@ -3664,13 +3875,12 @@ class DatastoreDistributed():
         prop.set_name(def_prop.name())
         prop.set_meaning(entity_pb.Property.INDEX_VALUE)
         prop.set_multiple(False)
-        if def_prop.direction() == entity_pb.Index_Property.DESCENDING:
-          value = helper_functions.reverse_lex(value)
 
         distinct_str += value
         prop_value = prop.mutable_value()
         self.__decode_index_str(value, prop_value)
-      key_string = tokens.pop(0)
+
+      key_string = tokens[-1]
       elements = key_string.split(dbconstants.KIND_SEPARATOR)
 
       # Set the entity group.
@@ -3847,21 +4057,20 @@ class DatastoreDistributed():
       query_result: The response given to the application server.
     """
     result = self.__get_query_results(query)
-    last_ent = None
+    last_entity = None
     count = 0
     offset = query.offset()
     if result:
       query_result.set_skipped_results(len(result) - offset)
-      # Last ent is used for determining the cursor.
-      last_ent = result[-1]
+      # Last entity is used for the cursor. It needs to be set before
+      # applying the offset.
+      last_entity = result[-1]
       count = len(result)
       result = result[offset:]
       if query.has_limit():
         result = result[:query.limit()]
-      for index, ii in enumerate(result):
-        result[index] = entity_pb.EntityProto(ii) 
-    
-    cur = appscale_stub_util.QueryCursor(query, result, last_ent)
+
+    cur = UnprocessedQueryCursor(query, result, last_entity)
     cur.PopulateQueryResult(count, query.offset(), query_result) 
 
     # If we have less than the amount of entities we request there are no
@@ -4077,9 +4286,8 @@ class MainHandler(tornado.web.RequestHandler):
     elif method == "GetIndices":
       response, errcode, errdetail = self.get_indices_request(app_id)
     elif method == "UpdateIndex":
-      response = api_base_pb.VoidProto().Encode()
-      errcode = 0
-      errdetail = ""
+      response, errcode, errdetail = self.update_index_request(app_id,
+        http_request_data)
     elif method == "DeleteIndex":
       response, errcode, errdetail = self.delete_index_request(app_id, 
                                                        http_request_data)
@@ -4186,7 +4394,7 @@ class MainHandler(tornado.web.RequestHandler):
     """
     global datastore_access
     query = datastore_pb.Query(http_request_data)
-    clone_qr_pb = datastore_pb.QueryResult()
+    clone_qr_pb = UnprocessedQueryResult()
     try:
       datastore_access._dynamic_run_query(query, clone_qr_pb)
     except ZKBadRequest, zkie:
@@ -4242,6 +4450,35 @@ class MainHandler(tornado.web.RequestHandler):
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on create index request.")
     return (response.Encode(), 0, "")
+
+  def update_index_request(self, app_id, http_request_data):
+    """ High level function for updating a composite index.
+
+    Args:
+      app_id: A string containing the application ID.
+      http_request_data: A string containing the protocol buffer request
+        from the AppServer.
+    Returns:
+       A tuple containing an encoded response, error code, and error details.
+    """
+    global datastore_access
+    index = entity_pb.CompositeIndex(http_request_data)
+    response = api_base_pb.VoidProto()
+
+    state = index.state()
+    if state not in [index.READ_WRITE, index.WRITE_ONLY]:
+      state_name = entity_pb.CompositeIndex.State_Name(state)
+      error_message = 'Unable to update index because state is {}. '\
+        'Index: {}'.format(state_name, index)
+      logging.error(error_message)
+      return response.Encode(), datastore_pb.Error.PERMISSION_DENIED,\
+        error_message
+    else:
+      # Updating index asynchronously so we can return a response quickly.
+      threading.Thread(target=datastore_access.update_composite_index,
+        args=(app_id, index)).start()
+
+    return response.Encode(), 0, ""
 
   def delete_index_request(self, app_id, http_request_data):
     """ Deletes a composite index for a given application.
@@ -4492,24 +4729,25 @@ def main(argv):
   db_type = db_info[':table']
   port = DEFAULT_SSL_PORT
   is_encrypted = True
+  verbose = False
 
   try:
-    opts, args = getopt.getopt(argv, "t:p:n:",
-      ["type=",
-      "port",
-      "no_encryption"])
+    opts, args = getopt.getopt(argv, "t:p:n:v:",
+      ["type=", "port", "no_encryption", "verbose"])
   except getopt.GetoptError:
     usage()
     sys.exit(1)
   
   for opt, arg in opts:
-    if  opt in ("-t", "--type"):
+    if opt in ("-t", "--type"):
       db_type = arg
       print "Datastore type: ", db_type
     elif opt in ("-p", "--port"):
       port = int(arg)
     elif opt in ("-n", "--no_encryption"):
       is_encrypted = False
+    elif opt in ("-v", "--verbose"):
+      verbose = True
 
   if db_type not in VALID_DATASTORES:
     print "This datastore is not supported for this version of the AppScale\
@@ -4520,8 +4758,8 @@ def main(argv):
                                              getDatastore(db_type)
   zookeeper = zk.ZKTransaction(host=zookeeper_locations)
 
-  datastore_access = DatastoreDistributed(datastore_batch, 
-                                          zookeeper=zookeeper)
+  datastore_access = DatastoreDistributed(datastore_batch,
+    zookeeper=zookeeper, debug=verbose)
   if port == DEFAULT_SSL_PORT and not is_encrypted:
     port = DEFAULT_PORT
 

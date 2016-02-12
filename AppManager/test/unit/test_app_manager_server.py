@@ -4,9 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import unittest
-import urllib
+import urllib2
 from xml.etree import ElementTree
 
 from flexmock import flexmock
@@ -18,6 +19,7 @@ import monit_app_configuration
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../lib"))
 import file_io
 import appscale_info
+import misc
 import monit_interface
 import testing
 
@@ -87,6 +89,8 @@ class TestAppManager(unittest.TestCase):
                 .and_return(flexmock(read=lambda: '12345\n'))
     flexmock(file_io).should_receive('write')\
                         .and_return()
+    flexmock(threading).should_receive('Thread').\
+      and_return(flexmock(start=lambda: None))
     self.assertEqual(0, app_manager_server.start_app(configuration))
   
   def test_start_app_goodconfig_java(self):
@@ -119,6 +123,8 @@ class TestAppManager(unittest.TestCase):
                         .and_return()
     flexmock(subprocess).should_receive('call')\
                         .and_return(0)
+    flexmock(threading).should_receive('Thread').\
+      and_return(flexmock(start=lambda: None))
     self.assertEqual(0, app_manager_server.start_app(configuration))
 
   def test_start_app_failed_copy_java(self):
@@ -156,22 +162,25 @@ class TestAppManager(unittest.TestCase):
     assert 0 < int(env_vars['GOMAXPROCS'])
 
   def test_find_web_xml(self):
-    files = [('/var/apps/foo/app/WEB-INF', '', 'appengine-web.xml')]
+    app_id = 'foo'
+    files = [('/var/apps/{}/app/WEB-INF'.format(app_id), '',
+      'appengine-web.xml')]
     flexmock(os).should_receive('walk').and_return(files)
-    app_manager_server.find_web_xml('foo')
+    app_manager_server.find_web_xml(app_id)
 
     files = [('', '', '')]
     flexmock(os).should_receive('walk').and_return(files)
     self.assertRaises(app_manager_server.BadConfigurationException,
-      app_manager_server.find_web_xml, files)
+      app_manager_server.find_web_xml, app_id)
 
     files = [
-      ('/var/apps/foo/app/WEB-INF', '', 'appengine-web.xml'),
-      ('/var/apps/foo/app/war/WEB-INF', '', 'appengine-web.xml'),
+      ('/var/apps/{}/app/WEB-INF'.format(app_id), '', 'appengine-web.xml'),
+      ('/var/apps/{}/app/war/WEB-INF'.format(app_id), '', 'appengine-web.xml')
     ]
     flexmock(os).should_receive('walk').and_return(files)
-    self.assertRaises(app_manager_server.BadConfigurationException,
-      app_manager_server.find_web_xml, files)
+    shortest_path = files[0]
+    web_xml = app_manager_server.find_web_xml(app_id)
+    self.assertEqual(web_xml, os.path.join(shortest_path[0], shortest_path[-1]))
 
   def test_extract_env_vars_from_xml(self):
     xml_template = '<appengine-web-app xmlns="http://appengine.google.com/ns/1.0">\
@@ -227,13 +236,19 @@ class TestAppManager(unittest.TestCase):
     self.assertIn(str(port), cmd)
 
   def test_stop_app_instance(self):
-    flexmock(subprocess).should_receive('call')\
-                        .and_return(0)
-    flexmock(file_io).should_receive('read')\
-                        .and_return('0')
-    flexmock(os).should_receive('system')\
-                        .and_return(0)
-    app_manager_server.stop_app('test')
+    app_id = 'test'
+    port = 20000
+    flexmock(misc).should_receive('is_app_name_valid').and_return(False)
+    self.assertFalse(app_manager_server.stop_app_instance(app_id, port))
+
+    flexmock(misc).should_receive('is_app_name_valid').and_return(True)
+    flexmock(app_manager_server).should_receive('remove_routing')
+    flexmock(monit_interface).should_receive('stop').and_return(False)
+    self.assertFalse(app_manager_server.stop_app_instance(app_id, port))
+
+    flexmock(monit_interface).should_receive('stop').and_return(True)
+    flexmock(os).should_receive('remove')
+    self.assertTrue(app_manager_server.stop_app_instance(app_id, port))
 
   def test_restart_app_instances_for_app(self):
     flexmock(subprocess).should_receive('call')\
@@ -252,13 +267,15 @@ class TestAppManager(unittest.TestCase):
     port = 20000
     ip = '127.0.0.1'
     testing.disable_logging()
-    flexmock(urllib).should_receive('urlopen').and_return()
+    fake_opener = flexmock(
+      open=lambda opener: flexmock(code=200, headers=flexmock(headers=[])))
+    flexmock(urllib2).should_receive('build_opener').and_return(fake_opener)
     flexmock(appscale_info).should_receive('get_private_ip')\
       .and_return(ip)
     self.assertEqual(True, app_manager_server.wait_on_app(port))
 
     flexmock(time).should_receive('sleep').and_return()
-    flexmock(urllib).should_receive('urlopen').and_raise(IOError)
+    fake_opener.should_receive('open').and_raise(IOError)
     self.assertEqual(False, app_manager_server.wait_on_app(port))
 
   def test_copy_modified_jars_success(self):

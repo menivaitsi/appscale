@@ -16,14 +16,14 @@ module BlobServer
 
 
   def self.start(db_local_ip, db_local_port)
-    blobserver = self.blob_script()
+    blobserver = self.scriptname()
     ports = self.server_ports()
     ports.each { |blobserver_port|
-      start_cmd = ["python #{blobserver}",
+      start_cmd = ["/usr/bin/python2 #{blobserver}",
             "-d #{db_local_ip}:#{db_local_port}",
             "-p #{blobserver_port}"].join(' ')
-
-      stop_cmd = "/usr/bin/pkill -9 blobstore_server"
+      stop_cmd = "/usr/bin/python2 #{APPSCALE_HOME}/scripts/stop_service.py " +
+        "#{blobserver} /usr/bin/python2"
 
       MonitInterface.start(:blobstore, start_cmd, stop_cmd, blobserver_port)
     }
@@ -47,14 +47,13 @@ module BlobServer
       return SERVER_PORTS
   end
 
-  def self.is_running(my_ip)
-    ports = self.server_ports
-    ports.each { |blobserver_port|
-     `curl http://#{my_ip}:#{blobserver_port}/` 
-    }
+  def self.is_running?(my_ip)
+    output = MonitInterface.is_running?(:blobstore)
+    Djinn.log_debug("Checking if blobstore is already monitored: #{output}")
+    return output
   end 
 
-  def self.blob_script()
+  def self.scriptname()
     return "#{APPSCALE_HOME}/AppDB/blobstore/blobstore_server.py"
   end
 end

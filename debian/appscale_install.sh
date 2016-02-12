@@ -5,6 +5,7 @@ fi
 
 DESTDIR=$2
 APPSCALE_HOME=${DESTDIR}${APPSCALE_HOME_RUNTIME}
+CURL_OPTS="-s"
 
 . debian/appscale_install_functions.sh
 
@@ -27,7 +28,6 @@ case "$1" in
         installgems
         postinstallhaproxy
         postinstallnginx
-        portinstallmonit
         installPIL
         installpythonmemcache
         installlxml
@@ -49,7 +49,7 @@ case "$1" in
         installsolr
         installservice
         postinstallservice
-        setupntp
+        postinstallmonit
         sethosts
         setulimits
         increaseconnections

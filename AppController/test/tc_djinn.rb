@@ -24,6 +24,7 @@ class TestDjinn < Test::Unit::TestCase
 
     djinn = flexmock(Djinn)
     djinn.should_receive(:log_run).with("").and_return()
+    djinn.should_receive(:log_run).with("service monit start").and_return()
 
     flexmock(HelperFunctions).should_receive(:shell).with("").and_return()
     flexmock(HelperFunctions).should_receive(:log_and_crash).and_raise(
@@ -49,7 +50,7 @@ class TestDjinn < Test::Unit::TestCase
     assert_equal(BAD_SECRET_MSG, djinn.is_done_loading(@secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_role_info(@secret))
     assert_equal(BAD_SECRET_MSG, djinn.get_app_info_map(@secret))
-    assert_equal(BAD_SECRET_MSG, djinn.kill(@secret))
+    assert_equal(BAD_SECRET_MSG, djinn.kill(false, @secret))
     assert_equal(BAD_SECRET_MSG, djinn.set_parameters("", "", "", @secret))
     assert_equal(BAD_SECRET_MSG, djinn.set_apps([], @secret))
     assert_equal(BAD_SECRET_MSG, djinn.status(@secret))
@@ -68,7 +69,7 @@ class TestDjinn < Test::Unit::TestCase
     assert_equal(BAD_SECRET_MSG, djinn.start_roles_on_nodes({}, @secret))
     assert_equal(BAD_SECRET_MSG, djinn.start_new_roles_on_nodes([], '', 
       @secret))
-    assert_equal(BAD_SECRET_MSG, djinn.add_appserver_to_haproxy(@app, 'baz',
+    assert_equal(BAD_SECRET_MSG, djinn.add_routing_for_appserver(@app, 'baz',
       'baz', @secret))
     assert_equal(BAD_SECRET_MSG, djinn.remove_appserver_from_haproxy(@app,
       'baz', 'baz', @secret))
@@ -306,6 +307,7 @@ class TestDjinn < Test::Unit::TestCase
     # mock out and commands
     flexmock(Djinn).should_receive(:log_run).and_return()
     flexmock(MonitInterface).should_receive(:start).and_return()
+    flexmock(Resolv).should_receive("getname").with("private_ip1").and_return("")
 
     flexmock(HelperFunctions).should_receive(:sleep_until_port_is_open).
       and_return()
@@ -728,10 +730,11 @@ class TestDjinn < Test::Unit::TestCase
 
     nginx_conf = "/etc/nginx/sites-enabled/booapp.conf"
     flexmock(File).should_receive(:open).with(nginx_conf, "w+", Proc).and_return()
+    flexmock(Nginx).should_receive(:start).and_return()
     flexmock(Nginx).should_receive(:is_running?).and_return(true)
 
     # mock out updating the firewall config
-    ip_list = "#{Djinn::CONFIG_FILE_LOCATION}/all_ips"
+    ip_list = "#{Djinn::APPSCALE_CONFIG_DIR}/all_ips"
     flexmock(File).should_receive(:open).with(ip_list, "w+", Proc).and_return()
     flexmock(Djinn).should_receive(:log_run).with(/bash .*firewall.conf/)
 
@@ -917,7 +920,7 @@ class TestDjinn < Test::Unit::TestCase
       and_return()
 
     # mock out updating the firewall config
-    ip_list = "#{Djinn::CONFIG_FILE_LOCATION}/all_ips"
+    ip_list = "#{Djinn::APPSCALE_CONFIG_DIR}/all_ips"
     flexmock(File).should_receive(:open).with(ip_list, "w+", Proc).and_return()
     flexmock(Djinn).should_receive(:log_run).with(/bash .*firewall.conf/)
 
@@ -1132,11 +1135,14 @@ class TestDjinn < Test::Unit::TestCase
         'nginx' => 80,
         'nginx_https' => 443,
         'haproxy' => 10000,
-        'appengine' => [20000]
+        'appengine' => ["1.2.3.4:20000"]
       }
     }
 
-    expected = "Error: Port in use by nginx for app another-app"
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:80 -sTCP:LISTEN").and_return("")
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:4380 -sTCP:LISTEN").and_return("")
+
+    expected = "Error: requested http port is already in use."
     assert_equal(expected, djinn.relocate_app('myapp', 80, 4380, @secret))
   end
 
@@ -1162,11 +1168,14 @@ class TestDjinn < Test::Unit::TestCase
         'nginx' => 80,
         'nginx_https' => 443,
         'haproxy' => 10000,
-        'appengine' => [20000]
+        'appengine' => ["1.2.3.4:20000"]
       }
     }
 
-    expected = "Error: Port in use by nginx for app another-app"
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:8080 -sTCP:LISTEN").and_return("")
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:443 -sTCP:LISTEN").and_return("")
+
+    expected = "Error: requested https port is already in use."
     assert_equal(expected, djinn.relocate_app('myapp', 8080, 443, @secret))
   end
 
@@ -1192,11 +1201,14 @@ class TestDjinn < Test::Unit::TestCase
         'nginx' => 80,
         'nginx_https' => 443,
         'haproxy' => 4380,
-        'appengine' => [20000]
+        'appengine' => ["1.2.3.4:20000"]
       }
     }
 
-    expected = "Error: Port in use by haproxy for app another-app"
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:8080 -sTCP:LISTEN").and_return("")
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:4380 -sTCP:LISTEN").and_return("")
+
+    expected = "Error: requested https port is already in use."
     assert_equal(expected, djinn.relocate_app('myapp', 8080, 4380, @secret))
   end
 
@@ -1222,11 +1234,14 @@ class TestDjinn < Test::Unit::TestCase
         'nginx' => 80,
         'nginx_https' => 443,
         'haproxy' => 10000,
-        'appengine' => [8080]
+        'appengine' => ["1.2.3.4:8080"]
       }
     }
 
-    expected = "Error: Port in use by AppServer for app another-app"
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:8080 -sTCP:LISTEN").and_return("")
+    flexmock(Djinn).should_receive(:log_run).with("lsof -i:4380 -sTCP:LISTEN").and_return("")
+
+    expected = "Error: requested http port is already in use."
     assert_equal(expected, djinn.relocate_app('myapp', 8080, 4380, @secret))
   end
 
@@ -1248,17 +1263,12 @@ class TestDjinn < Test::Unit::TestCase
     state_only = JSON.dump({'state' => djinn.state})
     assert_equal(state_only, djinn.get_property('state', @secret))
 
-    # Finally, passing in the regex userappserver_*_ip should return both the
-    # public and private UserAppServer IPs.
-    djinn.userappserver_public_ip = "public-ip"
-    djinn.userappserver_private_ip = "private-ip"
+    # Check that we can get the userappserver_ip.
+    djinn.userappserver_ip = "private-ip"
     userappserver_ips = JSON.dump({
-      'userappserver_public_ip' => 'public-ip',
-      'userappserver_private_ip' => 'private-ip'
+      'userappserver_ip' => 'private-ip'
     })
-    assert_equal(userappserver_ips['public-ip'], djinn.get_property('userappserver_.*_ip',
-      @secret)['public-ip'])
-    assert_equal(userappserver_ips['private-ip'], djinn.get_property('userappserver_.*_ip',
+    assert_equal(userappserver_ips['private-ip'], djinn.get_property('userappserver_ip',
       @secret)['private-ip'])
   end
 

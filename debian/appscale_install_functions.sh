@@ -18,6 +18,7 @@ fi
 VERSION_FILE="$APPSCALE_HOME_RUNTIME"/VERSION
 export APPSCALE_VERSION=$(grep AppScale "$VERSION_FILE" | sed 's/AppScale version \(.*\)/\1/')
 
+
 pipwrapper ()
 {
     # We have seen quite a few network/DNS issues lately, so much so that
@@ -40,32 +41,50 @@ pipwrapper ()
     fi
 }
 
+# This function is to disable the specify service so that it won't start
+# at next boot. AppScale manages those services.
+disableservice() {
+    if [ -n "$1" ]; then
+      update-rc.d "${1}" disable || true
+      # The following to make sure we disable it for upstart.
+      if [ -d "/etc/init" ]; then
+          echo "manual" > /etc/init/"${1}".override
+      fi
+    else
+        echo "Need a service name to disable!"
+        exit 1
+    fi
+}
+
 increaseconnections()
 {
-    echo "ip_conntrack" >> /etc/modules
+    if [ "${IN_DOCKER}" != "yes" ]; then
+        echo "ip_conntrack" >> /etc/modules
 
-    # Google Compute Engine doesn't allow users to use modprobe, so it's ok if
-    # the modprobe command fails.
-    modprobe ip_conntrack || true
+        # Google Compute Engine doesn't allow users to use modprobe, so it's ok if
+        # the modprobe command fails.
+        modprobe ip_conntrack || true
 
-    echo "net.netfilter.nf_conntrack_max = 262144" >> /etc/sysctl.conf
-    echo "net.core.somaxconn = 20240" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_tw_recycle = 0" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_tw_reuse = 0" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_orphan_retries = 1" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_fin_timeout = 25" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_max_orphans = 8192" >> /etc/sysctl.conf
-    echo "net.ipv4.ip_local_port_range = 32768    61000" >> /etc/sysctl.conf
+        echo "net.netfilter.nf_conntrack_max = 262144" >> /etc/sysctl.conf
+        echo "net.core.somaxconn = 20240" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_tw_recycle = 0" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_tw_reuse = 0" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_orphan_retries = 1" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_fin_timeout = 25" >> /etc/sysctl.conf
+        echo "net.ipv4.tcp_max_orphans = 8192" >> /etc/sysctl.conf
+        echo "net.ipv4.ip_local_port_range = 32768    61000" >> /etc/sysctl.conf
 
-    /sbin/sysctl -p /etc/sysctl.conf 
+        /sbin/sysctl -p /etc/sysctl.conf
+    fi
 }
 
 sethosts()
 {
-    cp -v /etc/hosts /etc/hosts.orig
-    HOSTNAME=`hostname`
-    echo "Generating /etc/hosts"
-    cat <<EOF | tee /etc/hosts
+    if [ "${IN_DOCKER}" != "yes" ]; then
+        cp -v /etc/hosts /etc/hosts.orig
+        HOSTNAME=`hostname`
+        echo "Generating /etc/hosts"
+        cat <<EOF | tee /etc/hosts
 127.0.0.1       localhost localhost.localdomain
 127.0.1.1 $HOSTNAME
 ::1     ip6-localhost ip6-loopback
@@ -75,34 +94,16 @@ ff02::1 ip6-allnodes
 ff02::2 ip6-allrouters
 ff02::3 ip6-allhosts
 EOF
-}
-
-setupntp()
-{
-    # Let's make sure time is tightly synchronized (64s poll).
-    echo -e "\nmaxpoll 6" >> /etc/ntp.conf
-
-    # This ensure that we synced first, to allow ntpd to stay
-    # synchronized. We have seen temporary failures in reaching out to the
-    # ntp pool, so we'll make sure we try few times.
-    service ntp stop
-    for x in {1..5} ; do
-        if ntpdate pool.ntp.org ; then
-            break
-        fi
-        sleep $x
-    done
-    if [ $x -gt 5 ]; then
-        echo "Cannot sync clock: you may have issues!"
     fi
-    service ntp start
 }
 
 installPIL()
 {
     if [ "$DIST" = "precise" ]; then
         pip uninstall -y PIL
-        pipwrapper pillow
+        # The behavior of the rotate function changed in pillow 3.0.0.
+        # The system package in trusty is version 2.3.0.
+        pipwrapper "pillow==2.3.0"
     fi
 }
 
@@ -177,12 +178,24 @@ EC2_HOME: /usr/local/ec2-api-tools
 JAVA_HOME: /usr/lib/jvm/java-7-openjdk-amd64
 EOF
     mkdir -pv /var/log/appscale
+    # Allow rsyslog to write to appscale log directory.
+    chgrp adm /var/log/appscale
+    chmod g+rwx /var/log/appscale
+
     mkdir -pv /var/appscale/
 
     # This puts in place the logrotate rules.
     if [ -d /etc/logrotate.d/ ]; then
         cp ${APPSCALE_HOME}/lib/templates/appscale-logrotate.conf /etc/logrotate.d/appscale
     fi
+
+    # Logrotate AppScale logs hourly.
+    LOGROTATE_HOURLY=/etc/cron.hourly/logrotate-hourly
+    cat <<EOF | tee $LOGROTATE_HOURLY
+#!/bin/sh
+/usr/sbin/logrotate /etc/logrotate.d/appscale*
+EOF
+    chmod +x $LOGROTATE_HOURLY
 }
 
 installthrift()
@@ -248,7 +261,7 @@ postinstallhaproxy()
 
     # AppScale starts/stop the service.
     service haproxy stop || true
-    update-rc.d -f haproxy remove || true
+    disableservice haproxy
 }
 
 installgems()
@@ -288,22 +301,13 @@ postinstallnginx()
     chmod +x /root
 }
 
-portinstallmonit()
-{
-    # Let's use our configuration.
-    cp ${APPSCALE_HOME}/monitrc /etc/monit/monitrc
-    chmod 0700 /etc/monit/monitrc
-    service monit stop
-    update-rc.d -f monit remove
-}
-
 installsolr()
 {
     SOLR_VER=4.10.2
     mkdir -p ${APPSCALE_HOME}/SearchService/solr
     cd ${APPSCALE_HOME}/SearchService/solr
     rm -rfv solr
-    wget $APPSCALE_PACKAGE_MIRROR/solr-${SOLR_VER}.tgz
+    curl ${CURL_OPTS} -o solr-${SOLR_VER}.tgz $APPSCALE_PACKAGE_MIRROR/solr-${SOLR_VER}.tgz
     tar zxvf solr-${SOLR_VER}.tgz
     mv -v solr-${SOLR_VER} solr
     rm -fv solr-${SOLR_VER}.tgz
@@ -317,7 +321,7 @@ installcassandra()
     mkdir -p ${APPSCALE_HOME}/AppDB/cassandra
     cd ${APPSCALE_HOME}/AppDB/cassandra
     rm -rfv cassandra
-    wget $APPSCALE_PACKAGE_MIRROR/apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
+    curl ${CURL_OPTS} -o apache-cassandra-${CASSANDRA_VER}-bin.tar.gz $APPSCALE_PACKAGE_MIRROR/apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
     tar xzvf apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
     mv -v apache-cassandra-${CASSANDRA_VER} cassandra
     rm -fv apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
@@ -329,13 +333,12 @@ installcassandra()
     chmod 777 /var/lib/cassandra
 
     if [ "$DIST" = "precise" ]; then
-        pipwrapper  setuptools
         pipwrapper  thrift
     fi
     pipwrapper  pycassa
 
     cd ${APPSCALE_HOME}/AppDB/cassandra/cassandra/lib
-    wget $APPSCALE_PACKAGE_MIRROR/jamm-0.2.2.jar
+    curl ${CURL_OPTS} -o jamm-0.2.2.jar $APPSCALE_PACKAGE_MIRROR/jamm-0.2.2.jar
 
     # Create separate log directory.
     mkdir -pv /var/log/appscale/cassandra
@@ -362,14 +365,12 @@ installservice()
 
 postinstallservice()
 {
-    # First, stop all services that don't need to be running at boot.
+    # Stop services shouldn't run at boot, then disable them.
     service memcached stop || true
-
-    # Next, remove them from the boot list.
-    update-rc.d -f memcached remove || true
+    disableservice memcached
 
     ejabberdctl stop || true
-    update-rc.d -f ejabberd remove || true
+    disableservice ejabberd
 }
 
 installpythonmemcache()
@@ -379,7 +380,7 @@ installpythonmemcache()
 
         mkdir -pv ${APPSCALE_HOME}/downloads
         cd ${APPSCALE_HOME}/downloads
-        wget $APPSCALE_PACKAGE_MIRROR/python-memcached-${VERSION}.tar.gz
+        curl ${CURL_OPTS} -o python-memcached-${VERSION}.tar.gz $APPSCALE_PACKAGE_MIRROR/python-memcached-${VERSION}.tar.gz
         tar zxvf python-memcached-${VERSION}.tar.gz
         cd python-memcached-${VERSION}
         python setup.py install
@@ -393,15 +394,19 @@ installzookeeper()
 {
     if [ "$DIST" = "precise" ]; then
         ZK_REPO_PKG=cdh4-repository_1.0_all.deb
-        wget -O  /tmp/${ZK_REPO_PKG} http://archive.cloudera.com/cdh4/one-click-install/precise/amd64/${ZK_REPO_PKG}
+        curl ${CURL_OPTS} -o /tmp/${ZK_REPO_PKG} http://archive.cloudera.com/cdh4/one-click-install/precise/amd64/${ZK_REPO_PKG}
         dpkg -i /tmp/${ZK_REPO_PKG}
         apt-get update
         apt-get install -y zookeeper-server
-        pipwrapper kazoo
     else
         apt-get install -y zookeeper zookeeperd zookeeper-bin
     fi
 
+    # Trusty's kazoo version is too old, so use the version in Xenial.
+    case "$DIST" in
+        precise|trusty) pipwrapper "kazoo==2.2.1" ;;
+        *) apt-get install python-kazoo ;;
+    esac
 }
 
 installpycrypto()
@@ -411,18 +416,26 @@ installpycrypto()
 
 postinstallzookeeper()
 {
-    # Need conf/environment to stop service.
-    cp -v /etc/zookeeper/conf_example/* /etc/zookeeper/conf || true
-    service zookeeper-server stop || true
-    update-rc.d -f zookeeper-server remove || true
-}
+    if [ "$DIST" = "precise" ]; then
+        service zookeeper-server stop || true
+        disableservice zookeeper-server
+    else
+        service zookeeper stop || true
+        disableservice zookeeper
+    fi
+    if [ ! -d /etc/zookeeper/conf ]; then
+        echo "Cannot find zookeeper configuration!"
+        exit 1
+    fi
 
-keygen()
-{
-    test -e /root/.ssh/id_rsa || ssh-keygen -q -t rsa -f /root/.ssh/id_rsa -N ""
-    touch /root/.ssh/authorized_keys
-    cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
-    chmod -v go-r /root/.ssh/authorized_keys
+    # Make sure we do logrotate the zookeeper logs.
+    if grep -v "^#" /etc/zookeeper/conf/log4j.properties|grep -i MaxBackupIndex > /dev/null ; then
+        # Let's make sure we don't keep more than 3 backups.
+        sed -i 's/\(.*[mM]ax[bB]ackup[iI]ndex\)=.*/\1=3/' /etc/zookeeper/conf/log4j.properties
+    else
+        # Let's add a rotation directive.
+        echo "log4j.appender.ROLLINGFILE.MaxBackupIndex=3" >> /etc/zookeeper/conf/log4j.properties
+    fi
 }
 
 installcelery()
@@ -437,7 +450,7 @@ postinstallrabbitmq()
 {
     # After install it starts up, shut it down.
     rabbitmqctl stop || true
-    update-rc.d -f rabbitmq-server remove || true
+    disableservice rabbitmq-server
 }
 
 installVersion()
@@ -473,4 +486,27 @@ postinstallrsyslog()
 
     # Restart the service
     service rsyslog restart || true
+}
+
+postinstallmonit()
+{
+    # We need to have http connection enabled to talk to monit.
+    if ! grep -v '^#' /etc/monit/monitrc |grep httpd > /dev/null; then
+        cat <<EOF | tee -a /etc/monit/monitrc
+
+# Added by AppScale: this is needed to have a working monit command
+set httpd port 2812 and
+   use address localhost  # only accept connection from localhost
+   allow localhost
+EOF
+    fi
+
+    # Check services every 5 seconds
+    sed -i 's/set daemon.*/set daemon 5/' /etc/monit/monitrc
+
+    # Monit cannot start at boot time: in case of accidental reboot, it
+    # would start processes out of order. The controller will restart
+    # monit as soon as it starts.
+    service monit stop
+    disableservice monit
 }

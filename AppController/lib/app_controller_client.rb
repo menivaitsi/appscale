@@ -72,6 +72,7 @@ class AppControllerClient
     @conn.add_method("set_apps_to_restart", "apps_to_restart", "secret")
     @conn.add_method("status", "secret")
     @conn.add_method("get_stats", "secret")
+    @conn.add_method("upload_app", "app", "secret")
     @conn.add_method("update", "app_names", "secret")
     @conn.add_method("stop_app", "app_name", "secret")    
     @conn.add_method("get_all_public_ips", "secret")
@@ -80,10 +81,6 @@ class AppControllerClient
     @conn.add_method("add_role", "new_role", "secret")
     @conn.add_method("remove_role", "old_role", "secret")
     @conn.add_method("get_queues_in_use", "secret")
-    @conn.add_method("add_appserver_to_haproxy", "app_id", "ip", "port",
-      "secret")
-    @conn.add_method("remove_appserver_from_haproxy", "app_id", "ip", "port",
-      "secret")
     @conn.add_method("add_appserver_process", "app_id", "secret")
     @conn.add_method("remove_appserver_process", "app_id", "port", "secret")
   end
@@ -131,8 +128,8 @@ class AppControllerClient
             trace = e.backtrace.join("\n")
             Djinn.log_warn("Exception encountered while talking to " +
               "#{@ip}:#{SERVER_PORT}.\n#{trace}")
-            raise FailedNodeException.new("Exception encountered while " +
-              "talking to #{@ip}:#{SERVER_PORT}.")
+            raise FailedNodeException.new("Exception #{e.class}:#{e.message} encountered " +
+              "while talking to #{@ip}:#{SERVER_PORT}.")
           end
         end
       }
@@ -148,7 +145,9 @@ class AppControllerClient
     make_call(10, ABORT_ON_FAIL, "set_parameters") { 
       result = conn.set_parameters(locations, options, apps_to_start, @secret)
     }  
-    HelperFunctions.log_and_crash(result) if result =~ /Error:/
+    if result =~ /Error:/
+      raise FailedNodeException.new("set_parameters returned #{result}.")
+    end
   end
 
   def set_apps(app_names)
@@ -156,7 +155,9 @@ class AppControllerClient
     make_call(10, ABORT_ON_FAIL, "set_apps") { 
       result = conn.set_apps(app_names, @secret)
     }  
-    HelperFunctions.log_and_crash(result) if result =~ /Error:/
+    if result =~ /Error:/
+      raise FailedNodeException.new("set_apps returned #{result}.")
+    end
   end
 
   def status(print_output=true)
@@ -172,7 +173,7 @@ class AppControllerClient
 
   def get_status()
     if !HelperFunctions.is_port_open?(@ip, 17443)
-      HelperFunctions.log_and_crash("AppController at #{@ip} is not running")
+      raise FailedNodeException.new("Cannot talk to AppController at #{@ip}.")
     end
 
     make_call(10, RETRY_ON_FAIL, "get_status") { @conn.status(@secret) }
@@ -180,6 +181,10 @@ class AppControllerClient
 
   def get_stats()
     make_call(10, RETRY_ON_FAIL, "get_stats") { @conn.get_stats(@secret) }
+  end
+
+  def upload_app(app)
+    make_call(30, RETRY_ON_FAIL, "upload_app") { @conn.upload_app(app, @secret) }
   end
 
   def stop_app(app_name)
@@ -230,39 +235,6 @@ class AppControllerClient
       @conn.set_apps_to_restart(app_names, @secret)
     }
   end
-
-  # Tells an AppController to route HAProxy traffic to the given location.
-  #
-  # Args:
-  #   app_id: A String that identifies the application that runs the new
-  #     AppServer.
-  #   ip: A String that identifies the private IP address where the new
-  #     AppServer runs.
-  #   port: A Fixnum that identifies the port where the new AppServer runs at
-  #     ip.
-  #   secret: A String that is used to authenticate the caller.
-  def add_appserver_to_haproxy(app_id, ip, port)
-    make_call(NO_TIMEOUT, RETRY_ON_FAIL, "add_appserver_to_haproxy") {
-      @conn.add_appserver_to_haproxy(app_id, ip, port, @secret)
-    }
-  end
-
-  # Tells an AppController to no longer route HAProxy traffic to the given
-  # location.
-  #
-  # Args:
-  #   app_id: A String that identifies the application that runs the AppServer
-  #     to remove.
-  #   ip: A String that identifies the private IP address where the AppServer
-  #     to remove runs.
-  #   port: A Fixnum that identifies the port where the AppServer was running.
-  #   secret: A String that is used to authenticate the caller.
-  def remove_appserver_from_haproxy(app_id, ip, port)
-    make_call(NO_TIMEOUT, RETRY_ON_FAIL, "remove_appserver_from_haproxy") {
-      @conn.remove_appserver_from_haproxy(app_id, ip, port, @secret)
-    }
-  end
-
 
   def add_appserver_process(app_id)
     make_call(NO_TIMEOUT, RETRY_ON_FAIL, "add_appserver_process") {

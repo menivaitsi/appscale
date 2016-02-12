@@ -25,18 +25,6 @@ CASSANDRA_DIR = "#{APPSCALE_HOME}/AppDB/cassandra"
 CASSANDRA_EXECUTABLE = "#{CASSANDRA_DIR}/cassandra/bin/cassandra"
 
 
-# Determines where the closest UserAppServer runs in this AppScale deployment.
-# For Cassandra, multiple UserAppServers can be running, so we defer this
-# calculation elsewhere.
-#
-# Returns:
-#   A String that names the private FQDN or IP address where a UserAppServer
-#   runs in this AppScale deployment.
-def get_uaserver_ip()
-  Djinn.get_nearest_db_ip
-end
-
-
 # Determines if a UserAppServer should run on this machine.
 #
 # Args:
@@ -155,14 +143,13 @@ def start_cassandra(clear_datastore)
 
   # TODO: Consider a more graceful stop command than this, which does a kill -9.
   start_cmd = "#{CASSANDRA_EXECUTABLE} start -p #{PID_FILE}"
-  stop_cmd = "/usr/bin/python /root/appscale/stop_service.py java cassandra"
-  match_cmd = "/root/appscale/AppDB/cassandra"
+  stop_cmd = "/usr/bin/python2 #{APPSCALE_HOME}/scripts/stop_service.py java cassandra"
+  match_cmd = "#{APPSCALE_HOME}/AppDB/cassandra"
   MonitInterface.start(:cassandra, start_cmd, stop_cmd, ports=9999, env_vars=nil,
     remote_ip=nil, remote_key=nil, match_cmd=match_cmd)
   HelperFunctions.sleep_until_port_is_open(HelperFunctions.local_ip,
     THRIFT_PORT)
 end
-
 
 # Kills Cassandra on this machine.
 def stop_db_master
