@@ -412,7 +412,8 @@ REQUIRED_LIBRARIES = {
     ('jinja2', 'latest'): [('markupsafe', 'latest'), ('setuptools', 'latest')],
     ('matplotlib', '1.1.1'): [('numpy', '1.6.1')],
     ('matplotlib', '1.2.0'): [('numpy', '1.6.1')],
-    ('matplotlib', 'latest'): [('numpy', 'latest')],
+    ('matplotlib', 'latest'): [('numpy', 'latest')], 
+    ('endpoints', 'latest'): [('endpoints', '1.0')]
 }
 
 _USE_VERSION_FORMAT = ('use one of: "%s" or "latest" '
