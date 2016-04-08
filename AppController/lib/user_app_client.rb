@@ -17,9 +17,17 @@ require 'helperfunctions'
 class UserAppClient
   attr_reader :conn, :ip, :secret
 
+  # The default name for the server.
+  NAME = "UserAppServer"
 
   # The port that the UserAppServer binds to, by default.
-  SERVER_PORT = 4343
+  SSL_SERVER_PORT = 4343
+
+  # The port the server is listening to.
+  SERVER_PORT = 4342
+
+  # The port used to have HAProxy in front of the UserAppServer.
+  HAPROXY_SERVER_PORT = 4341
 
   # This is the minimum Timeout to use when talking to the datastore.
   DS_MIN_TIMEOUT = 20
@@ -29,7 +37,7 @@ class UserAppClient
     @ip = ip
     @secret = secret
 
-    @conn = SOAP::RPC::Driver.new("https://#{@ip}:#{SERVER_PORT}")
+    @conn = SOAP::RPC::Driver.new("https://#{@ip}:#{SSL_SERVER_PORT}")
     @conn.options["protocol.http.ssl_config.verify_mode"] = nil
     @conn.add_method("change_password", "user", "password", "secret")
     @conn.add_method("commit_new_user", "user", "passwd", "utype", "secret")
@@ -48,6 +56,8 @@ class UserAppClient
     @conn.add_method("add_instance", "appname", "host", "port", "https_port", "secret")
     @conn.add_method("get_all_apps", "secret")
     @conn.add_method("get_all_users", "secret")
+    @conn.add_method("set_cloud_admin_status", "username", "is_cloud_admin", "secret")
+    @conn.add_method("set_capabilities", "username", "capabilities", "secret")
   end
 
 
@@ -59,7 +69,7 @@ class UserAppClient
           yield if block_given?
         rescue Errno::ECONNREFUSED, Errno::EHOSTUNREACH,
           OpenSSL::SSL::SSLError, NotImplementedError, Errno::EPIPE,
-          Errno::ECONNRESET, SOAP::EmptyResponseError, Exception => e
+          Errno::ECONNRESET, SOAP::EmptyResponseError, StandardError => e
           if retry_on_except
             Kernel.sleep(1)
             Djinn.log_debug("[#{callr}] exception in make_call to " +
@@ -120,6 +130,7 @@ class UserAppClient
     else
       puts "[unexpected] Commit new app says: [#{result}]"
     end
+    return result
   end
 
   def commit_tar(app_name, file_location, retry_on_except=true)
@@ -155,6 +166,7 @@ class UserAppClient
     else
       puts "[unexpected] Got this message back: [#{result}]"
     end
+    return result
   end
 
   def delete_app(app, retry_on_except=true)
@@ -328,4 +340,48 @@ class UserAppClient
 
     raise Exception.new("Couldn't find a cloud administrator")
   end
+
+  def set_admin_role(username, is_cloud_admin, capabilities, retry_on_except=true)
+    result_cloud_admin_status = set_cloud_admin_status(username, is_cloud_admin, retry_on_except)
+    result_set_capabilities = set_capabilities(username, capabilities, retry_on_except)
+    if result_cloud_admin_status and result_set_capabilities == "true"
+      puts "We successfully set admin role for the given user."
+      return "true"
+    else
+      puts "Got this message back while setting cloud admin status and capabilities:" +
+        "Set cloud admin status: [#{result_cloud_admin_status}]" +
+        "Set capabilities: [#{result_set_capabilities}]"
+    end
+  end
+
+  def set_cloud_admin_status(username, is_cloud_admin, retry_on_except)
+    result = ""
+    make_call(DS_MIN_TIMEOUT, retry_on_except, "set_cloud_admin_status") {
+      result = @conn.set_cloud_admin_status(username, is_cloud_admin, @secret)
+    }
+    if result == "true"
+      puts "We successfully set cloud admin status for the given user."
+    elsif result == "Error: user not found"
+      puts "We were unable to locate a user with the given username."
+    else
+      puts "[unexpected] Got this message back: [#{result}]"
+    end
+    return result
+  end
+
+  def set_capabilities(username, capabilities, retry_on_except)
+    result = ""
+    make_call(DS_MIN_TIMEOUT, retry_on_except, "set_capabilities") {
+      result = @conn.set_capabilities(username, capabilities, @secret)
+    }
+    if result == "true"
+      puts "We successfully set admin capabilities for the given user."
+    elsif result == "Error: user not found"
+      puts "We were unable to locate a user with the given username."
+    else
+      puts "[unexpected] Got this message back: [#{result}]"
+    end
+    return result
+  end
+
 end

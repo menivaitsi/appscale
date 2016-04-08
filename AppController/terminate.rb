@@ -14,7 +14,7 @@ module TerminateHelper
     `rm -f ~/.appscale_cookies`
     `rm -f /var/appscale/*.pid`
     `rm -f /etc/nginx/sites-enabled/*.conf`
-    `rm -f /etc/haproxy/sites-enabled/*.conf`
+    `rm -f /etc/haproxy/sites-enabled/*.cfg`
     `service nginx reload`
     # Stop and then remove the service we configured with monit.
     `monit stop all`
@@ -26,9 +26,11 @@ module TerminateHelper
     `rm -f /etc/monit/conf.d/appscale*.cfg`
     `rm -f /etc/monit/conf.d/controller-17443.cfg`
 
+    `rm -f /etc/logrotate.d/appscale-*`
+
     # Let's make sure we restart any non-appscale service.
     `service monit restart`
-    `killall -9 -g -r djinnServer`
+    `/usr/bin/python2 /root/appscale/scripts/stop_service.py /root/appscale/AppController/djinnServer.rb /usr/bin/ruby`
     `monit start all`
     `rm -f #{APPSCALE_CONFIG_DIR}/port-*.txt`
     `rm -f #{APPSCALE_CONFIG_DIR}/search_ip`

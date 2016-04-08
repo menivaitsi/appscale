@@ -10,12 +10,18 @@ APPSCALE_HOME = os.environ.get("APPSCALE_HOME", "/root/appscale")
 APP_PID_DIR = '/etc/appscale/'
 
 # Location of where data is persisted on disk.
-APPSCALE_DATA_DIR = '/opt/appscale/'
+APPSCALE_DATA_DIR = '/opt/appscale'
 
 # Location of Java AppServer.
 JAVA_APPSERVER = APPSCALE_HOME + '/AppServer_Java'
 
-# The location of the file which specifies the public IP of the head node..
+# The format each service should use for logging.
+LOG_FORMAT = '%(asctime)s %(levelname)s %(filename)s:%(lineno)s %(message)s '
+
+# The location of the file which specifies all the ips for this deployment.
+ALL_IPS_LOC = '/etc/appscale/all_ips'
+
+# The location of the file which specifies the public IP of the head node.
 LOGIN_IP_LOC = '/etc/appscale/login_ip'
 
 # The location of the file which specifies the current private IP.
@@ -80,3 +86,9 @@ RESERVED_APP_IDS = [DASHBOARD_APP_ID]
 
 # Location of where the search service is running.
 SEARCH_FILE_LOC = "/etc/appscale/search_ip"
+
+# Service scripts directory.
+SERVICES_DIR = '/etc/init.d'
+
+# The AppController's service name.
+CONTROLLER_SERVICE = 'appscale-controller'

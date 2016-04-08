@@ -20,7 +20,7 @@ module GroomerService
     stop_cmd = "/usr/bin/python2 #{APPSCALE_HOME}/scripts/stop_service.py " +
       "#{groomer} /usr/bin/python2"
     MonitInterface.start(:groomer_service, start_cmd, stop_cmd, "9999", {},
-      nil, nil, start_cmd, MAX_MEM)
+      start_cmd, MAX_MEM)
     MonitInterface.start_file(:groomer_file_check,
       "/var/log/appscale/groomer_service-9999.log", stop_cmd, "12")
   end
@@ -28,7 +28,8 @@ module GroomerService
   # Stops the groomer service running on this machine. Since it's
   # managed by monit, just tell monit to shut it down.
   def self.stop()
-     MonitInterface.stop(:groomer_service)
+    MonitInterface.stop(:groomer_service)
+    MonitInterface.stop(:groomer_file_check)
   end
 
   def self.scriptname()

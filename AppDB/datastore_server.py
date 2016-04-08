@@ -10,6 +10,7 @@ import array
 import __builtin__
 import getopt
 import itertools
+import json
 import logging
 import md5
 import os
@@ -33,6 +34,7 @@ from zkappscale.zktransaction import ZKTransactionException
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../lib/"))
 import appscale_info
+from constants import LOG_FORMAT
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../AppServer"))
 from google.appengine.api import api_base_pb
@@ -89,6 +91,13 @@ LOCAL_DATASTORE = "localhost:8888"
 
 # Global stats.
 STATS = {}
+
+# Determines whether or not to allow datastore writes. Note: After enabling,
+# datastore processes must be restarted and the groomer must be stopped.
+READ_ONLY = False
+
+# HTTP code to indicate that the request is invalid.
+HTTP_BAD_REQUEST = 400
 
 def clean_app_id(app_id):
   """ Google App Engine uses a special prepended string to signal that it
@@ -302,7 +311,7 @@ class DatastoreDistributed():
   # The number of entities to fetch at a time when updating indices.
   BATCH_SIZE = 100
 
-  def __init__(self, datastore_batch, zookeeper=None, debug=False):
+  def __init__(self, datastore_batch, zookeeper=None, log_level=logging.INFO):
     """
        Constructor.
      
@@ -310,11 +319,11 @@ class DatastoreDistributed():
        datastore_batch: A reference to the batch datastore interface.
        zookeeper: A reference to the zookeeper interface.
     """
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(filename)s:' \
-      '%(lineno)s %(message)s ', level=logging.ERROR)
-    if debug:
-      logging.getLogger().setLevel(logging.DEBUG)
-    logging.debug("Started logging")
+    class_name = self.__class__.__name__
+    self.logger = logging.getLogger(class_name)
+    self.logger.setLevel(log_level)
+
+    self.logger.info('Starting {}'.format(class_name))
 
     # datastore accessor used by this class to do datastore operations.
     self.datastore_batch = datastore_batch 
@@ -723,8 +732,8 @@ class DatastoreDistributed():
         yield (self.get_kind_key(prefix, e.key().path()),
           self.get_entity_key(prefix, e.key().path()))
 
-    logging.debug("Inserting entities {0} in DB with transaction hash {1}"
-      .format(str(entities), str(txn_hash)))
+    self.logger.debug('Inserting {} entities with transaction hash {}'.
+      format(len(entities), txn_hash))
     row_values = {}
     row_keys = []
 
@@ -732,7 +741,6 @@ class DatastoreDistributed():
     kind_row_values = {}
 
     entities = sorted((self.get_table_prefix(x), x) for x in entities)
-    logging.debug("Entities with table prefix are: {0}".format(str(entities)))
 
     for prefix, group in itertools.groupby(entities, lambda x: x[0]):
       group_rows = tuple(row_generator(group))
@@ -740,21 +748,15 @@ class DatastoreDistributed():
       row_keys += new_row_keys
 
       for ii in group_rows:
-        logging.debug("Trying to get root entity from entity key: {0}".\
-          format(str(ii[0])))
-        logging.debug("Root entity is: {0}".\
-          format(self.get_root_key_from_entity_key(str(ii[0]))))
-        logging.debug("Transaction hash is: {0}".format(str(txn_hash)))
+        root_key = self.get_root_key_from_entity_key(str(ii[0]))
         try:
-          txn_id = txn_hash[self.get_root_key_from_entity_key(str(ii[0]))]
+          txn_id = txn_hash[root_key]
           row_values[str(ii[0])] = \
             {dbconstants.APP_ENTITY_SCHEMA[0]:str(ii[1]), #ent
             dbconstants.APP_ENTITY_SCHEMA[1]:str(txn_id)} #txnid
         except KeyError, key_error:
-          logging.error("Key we are trying to get the root: {0}".\
-            format(str(ii[0])))
-          logging.error("Root key we got: {0}".\
-            format(self.get_root_key_from_entity_key(str(ii[0]))))
+          self.logger.error('Unable to find {} in {}'.
+            format(root_key, txn_hash))
           raise key_error
     for prefix, group in itertools.groupby(entities, lambda x: x[0]):
       kind_group_rows = tuple(kind_row_generator(group))
@@ -833,7 +835,7 @@ class DatastoreDistributed():
     value(s): The string representation of mulitiple properties.
     entity_key: The entity key (full path) used as a means of having a unique
       identifier. This prevents two entities with the same values from
-      colliding. 
+      colliding.
 
     Args:
       index: A datstore_pb.CompositeIndex.
@@ -860,7 +862,7 @@ class DatastoreDistributed():
 
     value_dict = {}
     for prop in entity.property_list():
-      value_dict[prop.name()]  = \
+      value_dict[prop.name()] = \
         str(DatastoreDistributed.__encode_index_pb(prop.value()))
 
     # Position list and filters are used if we're creating a composite
@@ -883,7 +885,7 @@ class DatastoreDistributed():
       if name in value_dict:
         value = value_dict[name]
       elif name == "__key__":
-        value = DatastoreDistributed.__encode_index_pb(entity.key().path())
+        value = ent_key
       else:
         logging.warning("Given entity {0} is missing a property value {1}.".\
           format(entity, prop.name()))
@@ -1160,7 +1162,7 @@ class DatastoreDistributed():
       app_id: A string containing the app ID.
       index: An entity_pb.CompositeIndex object.
     """
-    logging.info('Updating index: {}'.format(index))
+    self.logger.info('Updating index: {}'.format(index))
     entries_updated = 0
     entity_type = index.definition().entity_type()
 
@@ -1201,7 +1203,7 @@ class DatastoreDistributed():
       start_row = references[-1].keys()[0]
       start_inclusive = self._DISABLE_INCLUSIVITY
 
-    logging.info('Updated {} index entries.'.format(entries_updated))
+    self.logger.info('Updated {} index entries.'.format(entries_updated))
 
   def allocate_ids(self, app_id, size, max_id=None, num_retries=0):
     """ Allocates IDs from either a local cache or the datastore. 
@@ -1234,9 +1236,9 @@ class DatastoreDistributed():
           
     except ZKTransactionException, zk_exception:
       if num_retries > 0:
-        logging.warning("Having to retry on allocate ids for {0}" \
-          .format(app_id))
-        return self.allocate_ids(app_id, size, max_id=max_id, 
+        time.sleep(zk.ZKTransaction.ZK_RETRY_TIME)
+        self.logger.debug('Retrying to allocate ids for {}'.format(app_id))
+        return self.allocate_ids(app_id, size, max_id=max_id,
           num_retries=num_retries - 1)
       else:
         raise zk_exception
@@ -1455,14 +1457,10 @@ class DatastoreDistributed():
         self.release_locks_for_nontrans(app_id, entities, txn_hash)
       put_response.key_list().extend([e.key() for e in entities])
     except ZKTransactionException, zkte:
-      logging.warning("Concurrent transaction exception for app id {0} with " \
-        "info {1}".format(app_id, str(zkte)))
       for root_key in txn_hash:
         self.zookeeper.notify_failed_transaction(app_id, txn_hash[root_key])
       raise zkte
     except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.exception("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
       for root_key in txn_hash:
         self.zookeeper.notify_failed_transaction(app_id, txn_hash[root_key])
       raise dbce
@@ -1529,12 +1527,10 @@ class DatastoreDistributed():
         txn_hash[root_key] = txnid
         self.zookeeper.acquire_lock(app_id, txnid, root_key)
     except ZKTransactionException, zkte:
-      logging.warning("Concurrent transaction exception for app id {0} with " \
-        "info {1}".format(app_id, str(zkte)))
       if retries > 0:
-        logging.warning("Trying again to acquire lock" \
-          "info {1} with retry #{2}".format(app_id, str(zkte), retries))
         time.sleep(self.LOCK_RETRY_TIME)
+        self.logger.warning('Retrying to acquire lock. Retries left: {}'.
+          format(retries))
         return self.acquire_locks_for_nontrans(app_id, entities, retries-1)
       for key in txn_hash:
         self.zookeeper.notify_failed_transaction(app_id, txn_hash[key])
@@ -1619,8 +1615,7 @@ class DatastoreDistributed():
         txn_hash[root_key] = txnid
         self.zookeeper.acquire_lock(app_id, txnid, root_key)
     except ZKTransactionException, zkte:
-      logging.warning("Concurrent transaction exception for app id {0} with " \
-        "info {1}".format(app_id, str(zkte)))
+      self.logger.warning('Concurrent transaction: {}'.format(txnid))
       for root_key in txn_hash:
         self.zookeeper.notify_failed_transaction(app_id, txn_hash[root_key])
       raise zkte
@@ -1851,9 +1846,7 @@ class DatastoreDistributed():
       try:
         self.zookeeper.acquire_lock(app_id, txnid, root_key)
       except ZKTransactionException, zkte:
-        logging.warning("Concurrent transaction exception for app id {0} " \
-          "with transaction id {1}, and info {2}".format(app_id, txnid, 
-          str(zkte)))
+        self.logger.warning('Concurrent transaction: {}'.format(txnid))
         self.zookeeper.notify_failed_transaction(app_id, txnid)
         raise zkte
    
@@ -2212,8 +2205,7 @@ class DatastoreDistributed():
         prefix = self.get_table_prefix(query)
         self.zookeeper.acquire_lock(clean_app_id(query.app()), txn_id, root_key)
       except ZKTransactionException, zkte:
-        logging.warning("Concurrent transaction exception for app id {0}, " \
-          "transaction id {1}, info {2}".format(query.app(), txn_id, str(zkte)))
+        self.logger.warning('Concurrent transaction: {}'.format(txn_id))
         self.zookeeper.notify_failed_transaction(clean_app_id(query.app()), 
           txn_id)
         raise zkte
@@ -2269,8 +2261,7 @@ class DatastoreDistributed():
       try:
         self.zookeeper.acquire_lock(clean_app_id(query.app()), txn_id, root_key)
       except ZKTransactionException, zkte:
-        logging.warning("Concurrent transaction exception for app id {0}, " \
-          "transaction id {1}, info {2}".format(query.app(), txn_id, str(zkte)))
+        self.logger.warning('Concurrent transaction: {}'.format(txn_id))
         self.zookeeper.notify_failed_transaction(clean_app_id(query.app()), 
           txn_id)
         raise zkte
@@ -2382,56 +2373,45 @@ class DatastoreDistributed():
 
     return self.__extract_entities(final_result)
 
-  def kindless_query(self, query, filter_info, order_info):
+  def kindless_query(self, query, filter_info):
     """ Performs kindless queries where queries are performed 
         on the entity table and go across kinds.
       
     Args: 
       query: The query to run.
       filter_info: Tuple with filter operators and values.
-      order_info: Tuple with property name and the sort order.
     Returns:
       Entities that match the query.
     """       
     prefix = self.get_table_prefix(query)
 
+    filters = []
     if '__key__' in filter_info:
-      __key__ = str(filter_info['__key__'][0][1])
-      op = filter_info['__key__'][0][0]
-    else:
-      __key__ = ''
-      op = None
+      for filter in filter_info['__key__']:
+        filters.append({'key': str(filter[1]), 'op': filter[0]})
 
-    end_inclusive = self._ENABLE_INCLUSIVITY
-    start_inclusive = self._ENABLE_INCLUSIVITY
+    order = None
+    prop_name = None
 
-    startrow = prefix + self._SEPARATOR + __key__
+    startrow = prefix + self._SEPARATOR
     endrow = prefix + self._SEPARATOR + self._TERM_STRING
+    start_inclusive = self._ENABLE_INCLUSIVITY
+    end_inclusive = self._ENABLE_INCLUSIVITY
+    for filter in filters:
+      if filter['op'] == datastore_pb.Query_Filter.EQUAL:
+        startrow = prefix + self._SEPARATOR + filter['key']
+        endrow = startrow
+      if filter['op'] == datastore_pb.Query_Filter.GREATER_THAN:
+        startrow = prefix + self._SEPARATOR + filters[0]['key']
+        start_inclusive = self._DISABLE_INCLUSIVITY
+      if filter['op'] == datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL:
+        startrow = prefix + self._SEPARATOR + filters[0]['key']
+      if filter['op'] == datastore_pb.Query_Filter.LESS_THAN:
+        endrow = prefix + self._SEPARATOR + filter['key']
+        end_inclusive = self._DISABLE_INCLUSIVITY
+      if filter['op'] == datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:
+        endrow = prefix + self._SEPARATOR + filter['key']
 
-    if op and op == datastore_pb.Query_Filter.EQUAL:
-      startrow = prefix + self._SEPARATOR + __key__
-      endrow = prefix + self._SEPARATOR + __key__
-    elif op and op == datastore_pb.Query_Filter.GREATER_THAN:
-      start_inclusive = self._DISABLE_INCLUSIVITY
-      startrow = prefix + self._SEPARATOR + __key__ 
-      endrow = prefix + self._SEPARATOR + self._TERM_STRING
-      end_inclusive = self._DISABLE_INCLUSIVITY
-    elif op and op == datastore_pb.Query_Filter.GREATER_THAN_OR_EQUAL:
-      startrow = prefix + self._SEPARATOR + __key__
-      endrow = prefix + self._SEPARATOR + self._TERM_STRING
-      end_inclusive = self._DISABLE_INCLUSIVITY
-    elif op and op == datastore_pb.Query_Filter.LESS_THAN:
-      startrow = prefix + self._SEPARATOR  
-      endrow = prefix + self._SEPARATOR + __key__
-      end_inclusive = self._DISABLE_INCLUSIVITY
-    elif op and op == datastore_pb.Query_Filter.LESS_THAN_OR_EQUAL:
-      startrow = prefix + self._SEPARATOR 
-      endrow = prefix + self._SEPARATOR + __key__ 
-
-    if not order_info:
-      order = None
-      prop_name = None
-    
     if query.has_compiled_cursor() and query.compiled_cursor().position_size():
       cursor = appscale_stub_util.ListCursor(query)
       last_result = cursor._GetLastResult()
@@ -2441,14 +2421,16 @@ class DatastoreDistributed():
         start_inclusive = self._ENABLE_INCLUSIVITY
 
     limit = self.get_limit(query)
-    return self.fetch_from_entity_table(startrow,
-                                        endrow,
-                                        limit, 
-                                        0, 
-                                        start_inclusive, 
-                                        end_inclusive, 
-                                        query, 
-                                        0)
+    return self.fetch_from_entity_table(
+      startrow,
+      endrow,
+      limit,
+      offset=0,
+      start_inclusive=start_inclusive,
+      end_inclusive=end_inclusive,
+      query=query,
+      txn_id=0,
+    )
   
   def reverse_path(self, key):
     """ Use this function for reversing the key ancestry order. 
@@ -2544,6 +2526,7 @@ class DatastoreDistributed():
     Raises:
       AppScaleDBError: An infinite loop is detected when fetching references.
     """
+    self.logger.debug('Kind Query:\n{}'.format(query))
     filter_info = self.remove_exists_filters(filter_info)
     # Detect quickly if this is a kind query or not.
     for fi in filter_info:
@@ -2557,7 +2540,7 @@ class DatastoreDistributed():
     if query.has_ancestor() and not query.has_kind():
       return self.ancestor_query(query, filter_info, order_info)
     elif not query.has_kind():
-      return self.kindless_query(query, filter_info, order_info)
+      return self.kindless_query(query, filter_info)
     elif query.kind().startswith("__") and \
       query.kind().endswith("__"):
       # Use the default namespace for metadata queries.
@@ -2619,7 +2602,7 @@ class DatastoreDistributed():
       # references that we need.
       current_limit = invalid_refs + zk.MAX_GROUPS_FOR_XG
 
-      logging.debug('{} references invalid. Fetching {} more references.'
+      self.logger.debug('{} references invalid. Fetching {} more references.'
         .format(invalid_refs, current_limit))
 
       # Start from the last reference fetched.
@@ -2684,6 +2667,7 @@ class DatastoreDistributed():
     Returns:
       List of entities retrieved from the given query.
     """
+    self.logger.debug('Single Property Query:\n{}'.format(query))
     if query.kind().startswith("__") and \
       query.kind().endswith("__"):
       # Use the default namespace for metadata queries.
@@ -2778,7 +2762,7 @@ class DatastoreDistributed():
           new_entities.append(valid_entity)
 
       if len(multiple_equality_filters) > 0:
-        logging.debug('Detected multiple equality filters on a repeated'
+        self.logger.debug('Detected multiple equality filters on a repeated'
           'property. Removing results that do not match query.')
         new_entities = self.__apply_multiple_equality_filters(
           new_entities, multiple_equality_filters)
@@ -2803,7 +2787,7 @@ class DatastoreDistributed():
       # references that we need.
       current_limit = invalid_refs + zk.MAX_GROUPS_FOR_XG
 
-      logging.debug('{} references invalid. Fetching {} more references.'
+      self.logger.debug('{} references invalid. Fetching {} more references.'
         .format(invalid_refs, current_limit))
 
       last_startrow = startrow
@@ -2873,25 +2857,10 @@ class DatastoreDistributed():
       start_inclusive = False
 
     if end_compiled_cursor:
-      position = end_compiled_cursor.position(0)
-      if position.has_start_key():
-        cursor = appscale_stub_util.ListCursor(query)
-        last_result = cursor._GetEndResult()
-        endrow = self.__get_start_key(prefix, property_name, direction, 
-          last_result)
-      elif position.indexvalue_size() > 0:
-        index_value = position.indexvalue(0)
-        property_name = index_value.property()
-        value = index_value.value()
-        value = str(self.__encode_index_pb(value))
-        key_path = None
-        if position.has_key():
-          key_path = str(self.__encode_index_pb(position.key().path()))
-        params = [prefix, kind, property_name, value, key_path]
-        endrow = self.get_index_key_from_params(params)
-      else:
-        logging.warning("Unable to use end compiled cursor for query: {0}".\
-          format(query))
+      list_cursor = appscale_stub_util.ListCursor(query)
+      last_result, _ = list_cursor._DecodeCompiledCursor(end_compiled_cursor)
+      endrow = self.__get_start_key(prefix, property_name, direction,
+        last_result)
 
     # This query is returning based on order on a specfic property name 
     # The start key (if not already supplied) depends on the property
@@ -2981,8 +2950,8 @@ class DatastoreDistributed():
         start_inclusive = False
 
       if startrow > endrow:
-        logging.error("Start row is greater than end row :{0} versus {1}".\
-          format(startrow, endrow))
+        self.logger.error('Start row {} > end row {}'.
+          format([startrow], [endrow]))
         return []
  
       ret = self.datastore_batch.range_query(table_name, 
@@ -3151,7 +3120,8 @@ class DatastoreDistributed():
       order_info: tuple with property name and the sort order.
     Returns:
       List of entities retrieved from the given query.
-    """ 
+    """
+    self.logger.debug('ZigZag Merge Join Query:\n{}'.format(query))
     if not self.is_zigzag_merge_join(query, filter_info, order_info):
       return None
     kind = query.kind()  
@@ -3301,7 +3271,7 @@ class DatastoreDistributed():
         app_id, direction)
 
       if len(multiple_equality_filters) > 0:
-        logging.debug('Detected multiple equality filters on a repeated'
+        self.logger.debug('Detected multiple equality filters on a repeated'
           'property. Removing results that do not match query.')
         entities = self.__apply_multiple_equality_filters(
           entities, multiple_equality_filters)
@@ -3557,6 +3527,7 @@ class DatastoreDistributed():
     Returns:
       List of entities retrieved from the given query.
     """
+    self.logger.debug('Composite Query:\n{}'.format(query))
     start_inclusive = True
     startrow, endrow = self.get_range_composite_query(query, filter_info)
     # Override the start_key with a cursor if given.
@@ -3565,30 +3536,21 @@ class DatastoreDistributed():
       last_result = cursor._GetLastResult()
       composite_index = query.composite_index_list()[0]
        
-      startrow = self.get_composite_index_key(composite_index, last_result, \
-        position_list=query.compiled_cursor().position_list(), 
+      startrow = self.get_composite_index_key(composite_index, last_result,
+        position_list=query.compiled_cursor().position_list(),
         filters=query.filter_list())
       start_inclusive = False
       if query.compiled_cursor().position_list()[0].start_inclusive() == 1:
         start_inclusive = True
 
-    end_compiled_cursor = None
     if query.has_end_compiled_cursor():
       end_compiled_cursor = query.end_compiled_cursor()
-
-    if end_compiled_cursor:
-      position = end_compiled_cursor.position(0)
-      if position.has_start_key():
-        cursor = appscale_stub_util.ListCursor(query)
-        last_result = cursor._GetEndResult()
-        composite_index = query.composite_index_list()[0]
-        endrow = self.get_composite_index_key(composite_index, last_result, \
-          position_list=end_compiled_cursor.position_list(), filters= \
-          query.filter_list())
-      else:
-        logging.warning("Unable to use end compiled cursor for query: {0}".\
-          format(query))
-
+      list_cursor = appscale_stub_util.ListCursor(query)
+      last_result, _ = list_cursor._DecodeCompiledCursor(end_compiled_cursor)
+      composite_index = query.composite_index_list()[0]
+      endrow = self.get_composite_index_key(composite_index, last_result,
+        position_list=end_compiled_cursor.position_list(),
+        filters=query.filter_list())
 
     table_name = dbconstants.COMPOSITE_TABLE
     column_names = dbconstants.COMPOSITE_SCHEMA
@@ -3624,7 +3586,7 @@ class DatastoreDistributed():
           references, clean_app_id(query.app()))
 
       if len(multiple_equality_filters) > 0:
-        logging.debug('Detected multiple equality filters on a repeated'
+        self.logger.debug('Detected multiple equality filters on a repeated '
           'property. Removing results that do not match query.')
         potential_entities = self.__apply_multiple_equality_filters(
           potential_entities, multiple_equality_filters)
@@ -3649,9 +3611,8 @@ class DatastoreDistributed():
       # references that we need.
       current_limit = invalid_refs + zk.MAX_GROUPS_FOR_XG
 
-      logging.debug('{} entities do not match query. '
-        'Fetching {} more references.'
-        .format(invalid_refs, current_limit))
+      self.logger.debug('{} entities do not match query. '
+        'Fetching {} more references.'.format(invalid_refs, current_limit))
 
       last_startrow = startrow
       # Start from the last reference fetched.
@@ -3678,11 +3639,10 @@ class DatastoreDistributed():
         continue
 
       for prop in query_filter.property_list():
-        if prop.multiple():
-          if prop.name() not in equality_filters:
-            equality_filters[prop.name()] = []
+        if prop.name() not in equality_filters:
+          equality_filters[prop.name()] = []
 
-          equality_filters[prop.name()].append(prop)
+        equality_filters[prop.name()].append(prop)
 
     single_eq_filters = []
     for prop in equality_filters:
@@ -3810,7 +3770,7 @@ class DatastoreDistributed():
 
     if not prop_found:
       # Most likely, a repeated property was populated and then emptied.
-      logging.debug('Property name ({}) not found in entity.'.
+      self.logger.debug('Property name {} not found in entity.'.
         format(prop_name))
 
     return False
@@ -3867,8 +3827,8 @@ class DatastoreDistributed():
           value_index += 1
 
         if def_prop.name() not in prop_name_list:
-          logging.debug("Skipping prop in projection: {0}".format(
-            def_prop.name()))
+          self.logger.debug('Skipping prop {} in projection'.
+            format(def_prop.name()))
           continue
 
         prop = entity.add_property()
@@ -3919,7 +3879,8 @@ class DatastoreDistributed():
 
       distinct_checker.append(distinct_str)
     return entities
-  def __composite_query(self, query, filter_info, _):  
+
+  def __composite_query(self, query, filter_info, _):
     """Performs Composite queries which is a combination of 
        multiple properties to query on.
 
@@ -3933,7 +3894,8 @@ class DatastoreDistributed():
     if self.does_composite_index_exist(query):
       return self.composite_v2(query, filter_info)
 
-    logging.error("No composite ID was found for query {0}.".format(query))
+    self.logger.error('No composite ID was found for query:\n{}.'.
+      format(query))
     raise apiproxy_errors.ApplicationError(
       datastore_pb.Error.NEED_INDEX,
       'No composite index provided')
@@ -4003,7 +3965,6 @@ class DatastoreDistributed():
       __kind_query,
       zigzag_merge_join,
   ]
-
 
   def __get_query_results(self, query):
     """Applies the strategy for the provided query.
@@ -4110,24 +4071,31 @@ class DatastoreDistributed():
     commitres_pb = datastore_pb.CommitResponse()
     transaction_pb = datastore_pb.Transaction(http_request_data)
     txn_id = transaction_pb.handle()
+
+    if READ_ONLY:
+      self.logger.warning('Unable to commit in read-only mode: {}'.
+        format(transaction_pb))
+      return (commitres_pb.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       self.zookeeper.release_lock(app_id, txn_id)
       return (commitres_pb.Encode(), 0, "")
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-        "app id {0}, info: {1}".format(app_id, str(zkie)))
-      return (commitres_pb.Encode(), 
+      self.logger.exception('Unable to commit transaction {} for {}'.
+        format(transaction_pb, app_id))
+      return (commitres_pb.Encode(),
               datastore_pb.Error.BAD_REQUEST, 
               "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (commitres_pb.Encode(), 
+    except ZKInternalException:
+      self.logger.exception('ZKInternalException during {} for {}'.
+        format(transaction_pb, app_id))
+      return (commitres_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
     except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "transaction id {1}, info {2}".format(app_id, txn_id, str(zkte)))
+      self.logger.exception('Concurrent transaction during {} for {}'.
+        format(transaction_pb, app_id))
       self.zookeeper.notify_failed_transaction(app_id, txn_id)
       return (commitres_pb.Encode(), 
               datastore_pb.Error.PERMISSION_DENIED, 
@@ -4143,15 +4111,15 @@ class DatastoreDistributed():
       An encoded protocol buffer void response.
     """
     txn = datastore_pb.Transaction(http_request_data)
-    logging.info("Doing a rollback on transaction id {0} for app id {1}"
-      .format(txn.handle(), app_id))
+    self.logger.info('Doing a rollback on transaction {} for {}'.
+      format(txn, app_id))
     try:
       self.zookeeper.notify_failed_transaction(app_id, txn.handle())
       return (api_base_pb.VoidProto().Encode(), 0, "")
     except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "transaction id {1}, info {2}".format(app_id, txn.handle(), str(zkte)))
-      return (api_base_pb.VoidProto().Encode(), 
+      self.logger.exception('Unable to rollback {} for {}'.
+        format(txn, app_id))
+      return (api_base_pb.VoidProto().Encode(),
               datastore_pb.Error.PERMISSION_DENIED, 
               "Unable to rollback for this transaction: {0}".format(str(zkte)))
 
@@ -4164,6 +4132,29 @@ class ClearHandler(tornado.web.RequestHandler):
     global STATS
     STATS = {}
     self.write({"message": "Statistics for this server cleared."})
+    self.finish()
+
+class ReadOnlyHandler(tornado.web.RequestHandler):
+  """ Handles requests to check or set read-only mode. """
+  @tornado.web.asynchronous
+  def post(self):
+    """ Handle requests to turn read-only mode on or off. """
+    global READ_ONLY
+
+    payload = self.request.body
+    data = json.loads(payload)
+    if 'readOnly' not in data:
+      self.set_status(HTTP_BAD_REQUEST)
+
+    if data['readOnly']:
+      READ_ONLY = True
+      message = 'Write operations now disabled.'
+    else:
+      READ_ONLY = False
+      message = 'Write operations now enabled.'
+
+    logger.info(message)
+    self.write({'message': message})
     self.finish()
 
 class MainHandler(tornado.web.RequestHandler):
@@ -4186,15 +4177,15 @@ class MainHandler(tornado.web.RequestHandler):
   
   @tornado.web.asynchronous
   def post(self):
-    """ Function which handles POST requests. Data of the request is 
-        the request from the AppServer in an encoded protocol buffer 
+    """ Function which handles POST requests. Data of the request is
+        the request from the AppServer in an encoded protocol buffer
         format.
     """
     request = self.request
     http_request_data = request.body
     pb_type = request.headers['protocolbuffertype']
     app_data = request.headers['appdata']
-    app_data  = app_data.split(':')
+    app_data = app_data.split(':')
 
     if len(app_data) == 4:
       app_id, user_email, nick_name, auth_domain = app_data
@@ -4253,7 +4244,7 @@ class MainHandler(tornado.web.RequestHandler):
     method = apirequest.method()
     http_request_data = apirequest.request()
     start = time.time()
-    logging.debug("Request type:{0}".format(method))
+    logger.debug('Request type: {}'.format(method))
     if method == "Put":
       response, errcode, errdetail = self.put_request(app_id, 
                                                  http_request_data)
@@ -4296,7 +4287,6 @@ class MainHandler(tornado.web.RequestHandler):
       errdetail = "Unknown datastore message" 
 
     time_taken = time.time() - start
-    logging.debug("{0}/{1} took {2} seconds".format(app_id, method, time_taken))
     if method in STATS:
       if errcode in STATS[method]:
         prev_req, pre_time = STATS[method][errcode]
@@ -4334,12 +4324,18 @@ class MainHandler(tornado.web.RequestHandler):
 
     handle = None
     transaction_pb = datastore_pb.Transaction()
+
+    if READ_ONLY:
+      logger.warning('Unable to begin transaction in read-only mode: {}'.
+        format(begin_transaction_req_pb))
+      return (transaction_pb.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       handle = datastore_access.setup_transaction(app_id, multiple_eg)
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (transaction_pb.Encode(), 
+    except ZKInternalException:
+      logger.exception('Unable to begin {}'.format(transaction_pb))
+      return (transaction_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
 
@@ -4369,19 +4365,25 @@ class MainHandler(tornado.web.RequestHandler):
       An encoded protocol buffer void response.
     """
     global datastore_access
+    response = api_base_pb.VoidProto()
+
+    if READ_ONLY:
+      logger.warning('Unable to rollback in read-only mode: {}'.
+        format(http_request_data))
+      return (response.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       return datastore_access.rollback_transaction(app_id, http_request_data)
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (api_base_pb.VoidProto().Encode(), 
-              datastore_pb.Error.INTERNAL_ERROR, 
+    except ZKInternalException:
+      logger.exception('ZKInternalException during {} for {}'.
+        format(http_request_data, app_id))
+      return (response.Encode(), datastore_pb.Error.INTERNAL_ERROR,
               "Internal error with ZooKeeper connection.")
-    except Exception, exception:
-      logging.error("Error trying to rollback with exception {0}".format(
-        str(exception)))
-      return(api_base_pb.VoidProto().Encode(), 
-             datastore_pb.Error.PERMISSION_DENIED, 
+    except Exception:
+      logger.exception('Unable to rollback transaction')
+      return(response.Encode(),
+             datastore_pb.Error.INTERNAL_ERROR,
              "Unable to rollback for this transaction")
 
   def run_query(self, http_request_data):
@@ -4398,28 +4400,25 @@ class MainHandler(tornado.web.RequestHandler):
     try:
       datastore_access._dynamic_run_query(query, clone_qr_pb)
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-        "app id {0}, info: {1}".format(query.app(), str(zkie)))
-      return (clone_qr_pb.Encode(), 
+      logger.exception('Illegal arguments in transaction during {}'.
+        format(query))
+      return (clone_qr_pb.Encode(),
               datastore_pb.Error.BAD_REQUEST, 
               "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(query.app(), str(zkie)))
+    except ZKInternalException:
+      logger.exception('ZKInternalException during {}'.format(query))
       clone_qr_pb.set_more_results(False)
       return (clone_qr_pb.Encode(), 
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
-    except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "info {1}".format(query.app(), str(zkte)))
+    except ZKTransactionException:
+      logger.exception('Concurrent transaction during {}'.format(query))
       clone_qr_pb.set_more_results(False)
       return (clone_qr_pb.Encode(), 
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on put.")
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(query.app(), str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(query))
       clone_qr_pb.set_more_results(False)
       return (clone_qr_pb.Encode(),
              datastore_pb.Error.INTERNAL_ERROR,
@@ -4439,12 +4438,18 @@ class MainHandler(tornado.web.RequestHandler):
     global datastore_access
     request = entity_pb.CompositeIndex(http_request_data)
     response = api_base_pb.Integer64Proto()
+
+    if READ_ONLY:
+      logger.warning('Unable to create in read-only mode: {}'.
+        format(request))
+      return (response.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       index_id = datastore_access.create_composite_index(app_id, request)
       response.set_value(index_id)
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(request))
       response.set_value(0)
       return (response.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
@@ -4465,12 +4470,18 @@ class MainHandler(tornado.web.RequestHandler):
     index = entity_pb.CompositeIndex(http_request_data)
     response = api_base_pb.VoidProto()
 
+    if READ_ONLY:
+      logger.warning('Unable to update in read-only mode: {}'.
+        format(index))
+      return (response.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     state = index.state()
     if state not in [index.READ_WRITE, index.WRITE_ONLY]:
       state_name = entity_pb.CompositeIndex.State_Name(state)
       error_message = 'Unable to update index because state is {}. '\
         'Index: {}'.format(state_name, index)
-      logging.error(error_message)
+      logger.error(error_message)
       return response.Encode(), datastore_pb.Error.PERMISSION_DENIED,\
         error_message
     else:
@@ -4493,11 +4504,17 @@ class MainHandler(tornado.web.RequestHandler):
     global datastore_access
     request = entity_pb.CompositeIndex(http_request_data)
     response = api_base_pb.VoidProto()
+
+    if READ_ONLY:
+      logger.warning('Unable to delete in read-only mode: {}'.
+        format(request))
+      return (response.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try: 
       datastore_access.delete_composite_index_metadata(app_id, request)
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(request))
       return (response.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on delete index request.")
@@ -4518,8 +4535,8 @@ class MainHandler(tornado.web.RequestHandler):
     try:
       indices = datastore_access.get_indices(app_id)
     except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+      logger.exception('DB connection error while fetching indices for '
+        '{}'.format(app_id))
       return (response.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on get indices request.")
@@ -4545,32 +4562,35 @@ class MainHandler(tornado.web.RequestHandler):
     response = datastore_pb.AllocateIdsResponse()
     reference = request.model_key()
 
+    if READ_ONLY:
+      logger.warning('Unable to allocate in read-only mode: {}'.
+        format(request))
+      return (response.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     max_id = int(request.max())
     size = int(request.size())
     start = end = 0
     try:
       start, end = datastore_access.allocate_ids(app_id, size, max_id=max_id)
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-        "app id {0}, info: {1}".format(app_id, str(zkie)))
-      return (response.Encode(), 
+      logger.exception('Unable to allocate IDs for {}'.format(app_id))
+      return (response.Encode(),
               datastore_pb.Error.BAD_REQUEST, 
               "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
+    except ZKInternalException:
+      logger.exception('Unable to allocate IDs for {}'.format(app_id))
       return (response.Encode(), 
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
-    except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkte)))
+    except ZKTransactionException:
+      logger.exception('Unable to allocate IDs for {}'.format(app_id))
       return (response.Encode(), 
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on allocate id request.")
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error while allocating IDs for {}'.
+        format(app_id))
       return (response.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on allocate id request.")
@@ -4594,30 +4614,33 @@ class MainHandler(tornado.web.RequestHandler):
     putreq_pb = datastore_pb.PutRequest(http_request_data)
     putresp_pb = datastore_pb.PutResponse()
 
+    if READ_ONLY:
+      logger.warning('Unable to put in read-only mode: {}'.
+        format(putreq_pb))
+      return (putresp_pb.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       datastore_access.dynamic_put(app_id, putreq_pb, putresp_pb)
       return (putresp_pb.Encode(), 0, "")
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-      "app id {0}, info: {1}".format(app_id, str(zkie)))
-      return (putresp_pb.Encode(), 
+      logger.exception('Illegal argument during {}'.format(putreq_pb))
+      return (putresp_pb.Encode(),
             datastore_pb.Error.BAD_REQUEST, 
             "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (putresp_pb.Encode(), 
+    except ZKInternalException:
+      logger.exception('ZKInternalException during {}'.format(putreq_pb))
+      return (putresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
-    except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkte)))
-      return (putresp_pb.Encode(), 
+    except ZKTransactionException:
+      logger.exception('Concurrent transaction during {}'.
+        format(putreq_pb))
+      return (putresp_pb.Encode(),
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on put.")
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(putreq_pb))
       return (putresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on put.")
@@ -4638,26 +4661,23 @@ class MainHandler(tornado.web.RequestHandler):
     try:
       datastore_access.dynamic_get(app_id, getreq_pb, getresp_pb)
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-        "app id {0}, info: {1}".format(app_id, str(zkie)))
-      return (getresp_pb.Encode(), 
+      logger.exception('Illegal argument during {}'.format(getreq_pb))
+      return (getresp_pb.Encode(),
               datastore_pb.Error.BAD_REQUEST, 
               "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (getresp_pb.Encode(), 
+    except ZKInternalException:
+      logger.exception('ZKInternalException during {}'.format(getreq_pb))
+      return (getresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
-    except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkte)))
-      return (getresp_pb.Encode(), 
+    except ZKTransactionException:
+      logger.exception('Concurrent transaction during {}'.
+        format(getreq_pb))
+      return (getresp_pb.Encode(),
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on get.")
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(getreq_pb))
       return (getresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on get.")
@@ -4678,30 +4698,33 @@ class MainHandler(tornado.web.RequestHandler):
     delreq_pb = datastore_pb.DeleteRequest( http_request_data )
     delresp_pb = api_base_pb.VoidProto() 
 
+    if READ_ONLY:
+      logger.warning('Unable to delete in read-only mode: {}'.
+        format(delreq_pb))
+      return (delresp_pb.Encode(), datastore_pb.Error.CAPABILITY_DISABLED,
+        'Datastore is in read-only mode.')
+
     try:
       datastore_access.dynamic_delete(app_id, delreq_pb)
       return (delresp_pb.Encode(), 0, "")
     except ZKBadRequest, zkie:
-      logging.error("Illegal arguments in transactions "
-        "app id {0}, info: {1}".format(app_id, str(zkie)))
-      return (delresp_pb.Encode(), 
+      logger.exception('Illegal argument during {}'.format(delreq_pb))
+      return (delresp_pb.Encode(),
               datastore_pb.Error.BAD_REQUEST, 
               "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except ZKInternalException, zkie:
-      logging.error("ZK internal exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkie)))
-      return (delresp_pb.Encode(), 
+    except ZKInternalException:
+      logger.exception('ZKInternalException during {}'.format(delreq_pb))
+      return (delresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR, 
               "Internal error with ZooKeeper connection.")
-    except ZKTransactionException, zkte:
-      logging.error("Concurrent transaction exception for app id {0}, " \
-        "info {1}".format(app_id, str(zkte)))
-      return (delresp_pb.Encode(), 
+    except ZKTransactionException:
+      logger.exception('Concurrent transaction during {}'.
+        format(delreq_pb))
+      return (delresp_pb.Encode(),
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on delete.")
-    except dbconstants.AppScaleDBConnectionError, dbce:
-      logging.error("Connection issue with datastore for app id {0}, " \
-        "info {1}".format(app_id, str(dbce)))
+    except dbconstants.AppScaleDBConnectionError:
+      logger.exception('DB connection error during {}'.format(delreq_pb))
       return (delresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on delete.")
@@ -4716,12 +4739,18 @@ def usage():
   print "\t--port"
 
 pb_application = tornado.web.Application([
-    (r"/clear", ClearHandler),
-    (r"/*", MainHandler),
+  ('/clear', ClearHandler),
+  ('/read-only', ReadOnlyHandler),
+  (r'/*', MainHandler),
 ])
 
 def main(argv):
   """ Starts a web service for handing datastore requests. """
+
+  logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+  global logger
+  logger = logging.getLogger(__name__)
+
   global datastore_access
   zookeeper_locations = appscale_info.get_zk_locations_string()
 
@@ -4749,6 +4778,9 @@ def main(argv):
     elif opt in ("-v", "--verbose"):
       verbose = True
 
+  if verbose:
+    logger.setLevel(logging.DEBUG)
+
   if db_type not in VALID_DATASTORES:
     print "This datastore is not supported for this version of the AppScale\
           datastore API:" + db_type
@@ -4759,7 +4791,7 @@ def main(argv):
   zookeeper = zk.ZKTransaction(host=zookeeper_locations)
 
   datastore_access = DatastoreDistributed(datastore_batch,
-    zookeeper=zookeeper, debug=verbose)
+    zookeeper=zookeeper, log_level=logger.getEffectiveLevel())
   if port == DEFAULT_SSL_PORT and not is_encrypted:
     port = DEFAULT_PORT
 

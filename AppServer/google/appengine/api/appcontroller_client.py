@@ -27,10 +27,8 @@ class AppControllerClient():
   deployment as well as what services each node runs.
   """
 
-
   # The port that the AppController runs on by default.
   PORT = 17443
-
 
   # Maximum number of times we try a call to the AppController.
   MAX_RETRIES = 3
@@ -39,11 +37,12 @@ class AppControllerClient():
   # to start up.
   WAIT_TIME = 10
 
-
   # The message that an AppController can return if callers do not authenticate
   # themselves correctly.
   BAD_SECRET_MESSAGE = 'false: bad secret'
 
+  # An AppController response that indicates Nginx and HAProxy are not set up.
+  NOT_READY = 'false: not ready yet'
 
   def __init__(self, host, secret):
     """Creates a new AppControllerClient.
@@ -327,6 +326,14 @@ class AppControllerClient():
       app_id, appserver_ip, port, self.secret)
 
 
+  def add_routing_for_blob_server(self):
+    """ Tells the AppController to begin routing traffic to the
+        BlobServer(s).
+    """
+    return self.call(self.MAX_RETRIES, self.server.add_routing_for_blob_server,
+      self.secret)
+
+
   def remove_appserver_from_haproxy(self, app_id, appserver_ip, port):
     """ Tells the AppController to stop routing traffic to an AppServer.
 
@@ -358,4 +365,15 @@ class AppControllerClient():
       A string containing the deployment ID.
     """
     return self.call(self.MAX_RETRIES, self.server.get_deployment_id,
+      self.secret)
+
+
+  def set_read_only(self, read_only):
+    """ Enables or disables datastore writes for the deployment.
+
+    Args:
+      read_only: A string that indicates whether or to turn read-only mode on
+        or off.
+    """
+    return self.call(self.MAX_RETRIES, self.server.set_read_only, read_only,
       self.secret)

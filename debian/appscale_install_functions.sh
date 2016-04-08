@@ -17,11 +17,11 @@ fi
 
 export UNAME_MACHINE=$(uname -m)
 if [ -z "$JAVA_HOME_DIRECTORY" ]; then
-	if [ "$UNAME_MACHINE" = "x86_64" ]; then
-		export JAVA_HOME_DIRECTORY=/usr/lib/jvm/java-7-openjdk-amd64
-	elif [ "$UNAME_MACHINE" = "armv7l" ] || [ "$UNAME_MACHINE" = "armv6l" ]; then
-		export JAVA_HOME_DIRECTORY=/usr/lib/jvm/java-7-openjdk-armhf
-	fi
+    if [ "$UNAME_MACHINE" = "x86_64" ]; then
+        export JAVA_HOME_DIRECTORY=/usr/lib/jvm/java-7-openjdk-amd64
+    elif [ "$UNAME_MACHINE" = "armv7l" ] || [ "$UNAME_MACHINE" = "armv6l" ]; then
+        export JAVA_HOME_DIRECTORY=/usr/lib/jvm/java-7-openjdk-armhf
+    fi
 fi
 
 VERSION_FILE="$APPSCALE_HOME_RUNTIME"/VERSION
@@ -229,7 +229,7 @@ installappserverjava()
 
     if [ -n "$DESTDIR" ]; then
         # Delete unnecessary files.
-	rm -rfv src lib
+        rm -rfv src lib
     fi
 }
 
@@ -280,18 +280,7 @@ installgems()
     gem install rake ${GEMOPT}
     sleep 1
     # ZK 1.0 breaks our existing code - upgrade later.
-    if [ "$UNAME_MACHINE" = "x86_64" ]; then
-		gem install zookeeper
-	elif [ "$UNAME_MACHINE" = "armv7l" ] || [ "$UNAME_MACHINE" = "armv6l" ]; then
-		# If machine is Raspberry Pi, then go to patched version.
-	    export PWD_TEMP=$(pwd)
-		cd /root
-		git clone https://github.com/lmandres/zookeeper-raspberry-pi.git
-		cd zookeeper-raspberry-pi
-		gem build zookeeper.gemspec
-		gem install --local zookeeper-1.4.11.gem
-		cd ${PWD_TEMP}
-	fi
+    gem install zookeeper
     sleep 1
     gem install json ${GEMOPT}
     sleep 1
@@ -326,9 +315,11 @@ installsolr()
     SOLR_VER=4.10.2
     mkdir -p ${APPSCALE_HOME}/SearchService/solr
     cd ${APPSCALE_HOME}/SearchService/solr
-    rm -rfv solr
-    curl ${CURL_OPTS} -o solr-${SOLR_VER}.tgz $APPSCALE_PACKAGE_MIRROR/solr-${SOLR_VER}.tgz
-    tar zxvf solr-${SOLR_VER}.tgz
+    rm -rf solr
+    echo "Fetching solr-${SOLR_VER}.tgz"
+    curl ${CURL_OPTS} -o solr-${SOLR_VER}.tgz\
+      $APPSCALE_PACKAGE_MIRROR/solr-${SOLR_VER}.tgz
+    tar xzf solr-${SOLR_VER}.tgz
     mv -v solr-${SOLR_VER} solr
     rm -fv solr-${SOLR_VER}.tgz
 }
@@ -340,9 +331,11 @@ installcassandra()
     
     mkdir -p ${APPSCALE_HOME}/AppDB/cassandra
     cd ${APPSCALE_HOME}/AppDB/cassandra
-    rm -rfv cassandra
-    curl ${CURL_OPTS} -o apache-cassandra-${CASSANDRA_VER}-bin.tar.gz $APPSCALE_PACKAGE_MIRROR/apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
-    tar xzvf apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
+    rm -rf cassandra
+    echo "Fetching apache-cassandra-${CASSANDRA_VER}-bin.tar.gz"
+    curl ${CURL_OPTS} -o apache-cassandra-${CASSANDRA_VER}-bin.tar.gz\
+      $APPSCALE_PACKAGE_MIRROR/apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
+    tar xzf apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
     mv -v apache-cassandra-${CASSANDRA_VER} cassandra
     rm -fv apache-cassandra-${CASSANDRA_VER}-bin.tar.gz
     cd cassandra
@@ -530,4 +523,20 @@ EOF
     # monit as soon as it starts.
     service monit stop
     disableservice monit
+}
+
+installpsutil()
+{
+    case ${DIST} in
+        precise|wheezy) pipwrapper psutil ;;
+    esac
+}
+
+buildgo()
+{
+    GOROOT_DIR=${APPSCALE_HOME_RUNTIME}/AppServer/goroot
+    export GOROOT=${GOROOT_DIR}
+    GO_VERSION=`cat ${GOROOT_DIR}/VERSION`
+    echo "Building ${GO_VERSION} ..."
+    (cd ${GOROOT_DIR}/src && ./make.bash)
 }

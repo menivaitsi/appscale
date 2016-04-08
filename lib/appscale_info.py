@@ -38,6 +38,16 @@ def get_keyname():
   """ Returns the keyname for this deployment. """
   return get_db_info()[':keyname']
 
+def get_all_ips():
+  """ Get the IPs for all deployment nodes.
+
+  Returns:
+    A list of node IPs.
+  """
+  nodes = file_io.read(constants.ALL_IPS_LOC)
+  nodes = nodes.split('\n')
+  return filter(None, nodes)
+
 def get_login_ip():
   """ Get the public IP of the head node.
 
@@ -177,6 +187,14 @@ def get_db_slave_ips():
   if nodes[-1] == '':
     nodes = nodes[:-1]
   return nodes
+
+def get_db_ips():
+  """ Returns a list of database machines.
+
+  Returns:
+    A list of strings containing IP addresses.
+  """
+  return list(set([get_db_master_ip()] + get_db_slave_ips()))
 
 def get_search_location():
   """ Returns the IP and port of where the search service is running.

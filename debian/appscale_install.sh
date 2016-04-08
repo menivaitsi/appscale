@@ -56,5 +56,7 @@ case "$1" in
         installVersion
         installrequests
         postinstallrsyslog
+        installpsutil
+        buildgo
         ;;
 esac
