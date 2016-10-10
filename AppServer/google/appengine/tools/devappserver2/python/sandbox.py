@@ -649,7 +649,7 @@ _MODULE_OVERRIDE_POLICIES = {
         default_stub=stubs.os_error_not_implemented,
         whitelist=['altsep', 'curdir', 'defpath', 'devnull', 'environ', 'error',
                    'fstat', 'getcwd', 'getcwdu', 'getenv', '_get_exports_list',
-                   'name', 'open', 'pardir', 'path', 'pathsep', 'sep',
+                   'getuid', 'name', 'open', 'pardir', 'path', 'pathsep', 'sep',
                    'stat_float_times', 'stat_result', 'strerror', 'sys',
                    'walk'],
         overrides={
