@@ -801,6 +801,7 @@ class HardenedModulesHook(object):
       'posix',
       'posixpath',
       'pyexpat',
+      'pwd',
       'sha',
       'struct',
       'strxor',
