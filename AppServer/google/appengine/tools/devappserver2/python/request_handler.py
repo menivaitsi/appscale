@@ -68,6 +68,7 @@ class RequestHandler(object):
         # Used by the Logs API to send logs to the AppDashboard
         'MY_IP_ADDRESS' : os.environ['MY_IP_ADDRESS'],
         'NGINX_HOST' : os.environ['NGINX_HOST'],
+        'CURRENT_MODULE_ID' : 'default',
         }
     self._command_globals = {}  # Use to evaluate interactive requests.
     self.environ_template.update((env.key, env.value) for env in config.environ)
