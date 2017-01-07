@@ -51,10 +51,6 @@ class DjinnServer < SOAP::RPC::HTTPServer
     @djinn.job
   end
 
-  def djinn_locations
-    @djinn.djinn_locations
-  end
-
   def on_init
     @djinn = Djinn.new
 
@@ -66,11 +62,11 @@ class DjinnServer < SOAP::RPC::HTTPServer
     add_method(@djinn, "relocate_app", "appid", "http_port", "https_port",
       "secret")
     add_method(@djinn, "kill", "stop_deployment", "secret")
-    add_method(@djinn, "set_parameters", "djinn_locations",
-      "database_credentials", "app_names", "secret")
+    add_method(@djinn, "set_parameters", "layout", "options", "secret")
     add_method(@djinn, "status", "secret")
     add_method(@djinn, "get_stats", "secret")
     add_method(@djinn, "get_stats_json", "secret")
+    add_method(@djinn, "get_application_cron_info", "app_name", "secret")
     add_method(@djinn, "upload_app", "archived_file", "file_suffix", "email",
       "secret")
     add_method(@djinn, "get_app_upload_status", "reservation_id", "secret")
@@ -91,8 +87,6 @@ class DjinnServer < SOAP::RPC::HTTPServer
     add_method(@djinn, "add_routing_for_appserver", "app_id", "ip", "port",
       "secret")
     add_method(@djinn, "add_routing_for_blob_server", "secret")
-    add_method(@djinn, "remove_appserver_from_haproxy", "app_id", "ip", "port",
-      "secret")
     add_method(@djinn, "run_groomer", "secret")
     add_method(@djinn, "get_property", "property_regex", "secret")
     add_method(@djinn, "set_property", "property_name", "property_value",
