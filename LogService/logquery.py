@@ -11,7 +11,7 @@ import capnp  # pylint: disable=unused-import
 import logging_capnp
 
 _I_SIZE = struct.calcsize('I')
-MAX_LOG_LINE_LENGTH = 120
+MAX_LOG_LINE_LENGTH = 2048
 
 def get_connection(args):
   url = urlparse(args.con)
