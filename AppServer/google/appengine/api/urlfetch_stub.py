@@ -410,6 +410,9 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
 
 
             socket.setdefaulttimeout(deadline)
+          logging.warning(">>> Incoming: {}".format(url))
+          logging.warning(">>> Fetching: {}{}".format(host, full_path))
+
           connection.request(method, full_path, payload, adjusted_headers)
           http_response = connection.getresponse()
           if method == 'HEAD':
