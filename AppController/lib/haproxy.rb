@@ -171,33 +171,31 @@ module HAProxy
   # Generates a load balancer configuration file. Since HAProxy doesn't provide
   # a `file include` option we emulate that functionality here.
   def self.regenerate_config()
-    conf = File.open(MAIN_CONFIG_FILE,"w+")
-
-    # Start by writing in the base file
-    File.open(BASE_CONFIG_FILE, "r") do |base|
-      conf.write(base.read())
-    end
-
-    sites = Dir.entries(SITES_ENABLED_PATH)
     # Remove any files that are not configs
+    sites = Dir.entries(SITES_ENABLED_PATH)
     sites.delete_if { |site| !site.end_with?(CONFIG_EXTENSION) }
-
     sites.sort!
 
-    # Append each one of the configs into the main one
+    # Build the configuration in memory first.
+    config = File.read(BASE_CONFIG_FILE)
     sites.each do |site|
-      conf.write("\n")
-      File.open(File.join(SITES_ENABLED_PATH, site), "r") do |site_config|
-        conf.write(site_config.read())
-      end
-      conf.write("\n")
+      config << File.read(File.join(SITES_ENABLED_PATH, site))
+      config << "\n"
     end
 
-    conf.close()
-    # Reload haproxy since we changed the config, restarting causes connections
-    # to be cut which shows users a nginx 404
-    HAProxy.reload()
+    # We overwrite only if something changed.
+    current = ""
+    current = File.read(MAIN_CONFIG_FILE)  if File.exists?(MAIN_CONFIG_FILE)
+    if current == config
+      Djinn.log_debug("No need to restart haproxy: configuration didn't change.")
+      return
+    end
+
+    # Update config file and restart haproxy.
+    File.open(MAIN_CONFIG_FILE, "w+") { |dest_file| dest_file.write(config) }
+    HAProxy.reload
   end
+
 
   # Generate the server configuration line for the provided inputs. GAE applications
   # that are thread safe will have a higher connection limit.
@@ -208,6 +206,7 @@ module HAProxy
       return "  server #{app_name}-#{location} #{location} #{SERVER_OPTIONS}"
     end
   end
+
 
   # Updates the HAProxy config file for this App Engine application to
   # point to all the ports currently used by the application.
@@ -282,7 +281,7 @@ global
   spread-checks 5
 
   # Bind socket for haproxy stats
-  stats socket /etc/haproxy/stats level admin
+  stats socket #{HAPROXY_PATH}/stats level admin
 
 # Settings in the defaults section apply to all services (unless overridden in a specific config)
 defaults
@@ -338,6 +337,7 @@ defaults
 
   # Amount of time after which a health check is considered to have timed out
   timeout check 5000
+
 CONFIG
 
     # Create the sites enabled folder
@@ -366,7 +366,7 @@ CONFIG
 
     # Retrieve total and enqueued requests for the given app.
     monitoring_info = Djinn.log_run("echo \"show stat\" | " +
-      "socat stdio unix-connect:/etc/haproxy/stats | grep #{app_name}")
+      "socat stdio unix-connect:#{HAPROXY_PATH}/stats | grep #{app_name}")
     Djinn.log_debug("HAProxy raw stats: #{monitoring_info}")
 
     if monitoring_info.empty?
@@ -414,7 +414,7 @@ CONFIG
     running = []
     failed = []
     servers = Djinn.log_run("echo \"show stat\" | socat stdio " +
-      "unix-connect:/etc/haproxy/stats | grep \"#{full_app_name}\"")
+      "unix-connect:#{HAPROXY_PATH}/stats | grep \"#{full_app_name}\"")
     servers.each_line{ |line|
       parsed_info = line.split(',')
       next if parsed_info[SERVICE_NAME_INDEX] == "FRONTEND"
@@ -448,7 +448,7 @@ CONFIG
 
     # Let's set the weight to 0, and check if the server is actually known by haproxy.
     result = Djinn.log_run("echo \"set weight #{full_app_name}/#{appserver} 0%\" |" +
-      " socat stdio unix-connect:/etc/haproxy/stats")
+      " socat stdio unix-connect:#{HAPROXY_PATH}/stats")
     if result.include?(HAPROXY_ERROR_PREFIX)
       Djinn.log_warn("Server #{full_app_name}/#{appserver} does not exists.")
       return -1
@@ -456,7 +456,7 @@ CONFIG
 
     # Retrieve the current sessions for this server.
     server_stat = Djinn.log_run("echo \"show stat\" | socat stdio " +
-      "unix-connect:/etc/haproxy/stats | grep \"#{full_app_name},#{appserver}\"")
+      "unix-connect:#{HAPROXY_PATH}/stats | grep \"#{full_app_name},#{appserver}\"")
     if server_stat.empty? or server_stat.length > 1
       # We shouldn't be here, since we set the weight before.
       Djinn.log_warn("Something wrong retrieving stat for #{full_app_name}/#{appserver}!")
