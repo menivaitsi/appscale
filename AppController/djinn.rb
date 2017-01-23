@@ -939,10 +939,6 @@ class Djinn
     new_level = Logger::INFO
     new_level = Logger::DEBUG if @options['verbose'].downcase == "true"
     @@log.level = new_level if @@log.level != new_level
-
-    # Make sure flower is running with the proper password.
-    TaskQueue.stop_flower
-    TaskQueue.start_flower(@options['flower_password']) if my_node.is_shadow?
   end
 
   # This is the method needed to get the current layout and options for
@@ -1479,6 +1475,10 @@ class Djinn
         unless is_cloud?
           Djinn.log_warn("max_images is not used in non-cloud infrastructures.")
         end
+      end
+      if key == "flower_password"
+        TaskQueue.stop_flower
+        TaskQueue.start_flower(@options['flower_password']) if my_node.is_shadow?
       end
       if key == "replication"
         Djinn.log_warn("replication cannot be changed at runtime.")
@@ -2912,7 +2912,6 @@ class Djinn
     HAProxy.create_ua_server_config(all_db_private_ips,
       my_node.private_ip, UserAppClient::HAPROXY_SERVER_PORT)
     Nginx.create_uaserver_config(my_node.private_ip)
-    Nginx.reload()
   end
 
   def configure_db_nginx()
@@ -2923,7 +2922,6 @@ class Djinn
       end
     }
     Nginx.create_datastore_server_config(all_db_private_ips, DatastoreServer::PROXY_PORT)
-    Nginx.reload()
   end
 
   # Creates HAProxy configuration for the TaskQueue REST API.
@@ -2937,7 +2935,6 @@ class Djinn
     HAProxy.create_tq_endpoint_config(all_tq_ips,
       my_node.private_ip, TaskQueue::HAPROXY_PORT)
     Nginx.create_taskqueue_rest_config(my_node.private_ip)
-    Nginx.reload()
   end
 
   def write_database_info()
@@ -4224,6 +4221,8 @@ class Djinn
 
     # If nothing changed since last time we wrote locations file(s), skip it.
     if new_content != @locations_content
+      @locations_content = new_content
+
       # For the taskqueue, let's shuffle the entries, and then put
       # ourselves as first option, if we are a taskqueue node.
       taskqueue_ips.shuffle!
@@ -4231,6 +4230,7 @@ class Djinn
         taskqueue_ips.delete(my_private)
         taskqueue_ips.unshift(my_private)
       end
+      taskqueue_content = taskqueue_ips.join("\n") + "\n"
 
       Djinn.log_info("All private IPs: #{all_ips}.")
       HelperFunctions.write_file("#{APPSCALE_CONFIG_DIR}/all_ips", all_ips_content)
@@ -4263,8 +4263,6 @@ class Djinn
 
       Djinn.log_info("Search service locations: #{search_ips}.")
       HelperFunctions.write_file(Search::SEARCH_LOCATION_FILE, search_content)
-
-      @locations_content = new_content
     end
   end
 
@@ -5479,7 +5477,7 @@ HOSTS
         total = (Float(node['free_memory'])*100)/(100-Float(node['memory']))
 
         # Ensure we have enough memory for all running AppServers.
-        if !max_memory[host].nil? and max_memory[host] > total - SAFE_MEM
+        if !max_memory[host].nil? && max_memory[host] > total - SAFE_MEM
           Djinn.log_debug("#{host} doesn't have enough total memory.")
           break
         end
