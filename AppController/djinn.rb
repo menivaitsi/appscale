@@ -3855,7 +3855,7 @@ class Djinn
 
   # Starts the Log Server service on this machine
   def start_log_server
-    log_server_pid = "#{APPSCALE_HOME}/LogService/logserver.pid"
+    log_server_pid = "/var/run/appscale/logserver.pid"
     start_cmd = "twistd --pidfile=#{log_server_pid} appscale-logserver"
     stop_cmd = "/bin/bash -c '$(which kill) $(cat #{log_server_pid}'"
     port = 7422
@@ -4231,6 +4231,10 @@ class Djinn
         taskqueue_ips.unshift(my_private)
       end
       taskqueue_content = taskqueue_ips.join("\n") + "\n"
+
+      head_node_private_ip = get_shadow.private_ip
+      HelperFunctions.write_file("#{APPSCALE_CONFIG_DIR}/head_node_private_ip",
+                                 "#{head_node_private_ip}\n")
 
       Djinn.log_info("All private IPs: #{all_ips}.")
       HelperFunctions.write_file("#{APPSCALE_CONFIG_DIR}/all_ips", all_ips_content)

@@ -17,6 +17,7 @@
 """Manage the lifecycle of runtime processes and dispatch requests to them."""
 
 
+import capnp
 import collections
 import cStringIO
 import functools
