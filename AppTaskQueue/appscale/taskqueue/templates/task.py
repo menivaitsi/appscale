@@ -70,6 +70,9 @@ def QUEUE_NAME(headers, args):
       db.delete(item)
       return
 
+    if QUEUE_NAME.request.retries > 0:
+      time.sleep(0.2)
+
     if url.scheme == 'http':
       connection = httplib.HTTPConnection(PUBLIC_IP, url.port)
     elif url.scheme == 'https':
