@@ -589,6 +589,7 @@ class DatastoreProxy(AppDBInterface):
     try:
       result = self.session.execute(set_status_statement, parameters)
     except cassandra.WriteTimeout:
+      self.logger.debug('Write timeout during op {}'.format(op_id))
       get_status = """
         SELECT op_id FROM batch_status
         WHERE app = %(app)s AND transaction = %(transaction)s
@@ -617,6 +618,7 @@ class DatastoreProxy(AppDBInterface):
         self.logger.debug('Batch start was already applied.')
         return
 
+      self.logger.debug('Selected op_id was {}'.format(select_result.op_id))
       raise FailedBatch('A batch for transaction {} already exists'.
                         format(txid))
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:

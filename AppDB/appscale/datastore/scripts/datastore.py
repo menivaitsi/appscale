@@ -581,7 +581,7 @@ class MainHandler(tornado.web.RequestHandler):
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on put.")
     except (dbconstants.AppScaleDBConnectionError, dbconstants.FailedBatch):
-      logger.exception('DB connection error during {}'.format(putreq_pb))
+      logger.exception('DB connection error during put')
       return (putresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on put.")
