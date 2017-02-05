@@ -20,6 +20,7 @@ from ..dbconstants import (AppScaleDBConnectionError,
                            MAX_TX_DURATION,
                            TRANSIENT_CASSANDRA_ERRORS)
 from ..unpackaged import APPSCALE_PYTHON_APPSERVER
+from ..utils import tx_partition
 
 from cassandra.cluster import SimpleStatement
 from cassandra.policies import FallthroughRetryPolicy
@@ -1442,11 +1443,11 @@ class ZKTransaction:
     """
     clear_status = """
       DELETE FROM batch_status
-      WHERE app = %(app)s AND transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
       IF applied = False
     """
     statement = SimpleStatement(clear_status, retry_policy=NO_RETRIES)
-    parameters = {'app': app, 'transaction': txid}
+    parameters = {'transaction': tx_partition(app, txid)}
 
     try:
       result = self.db_access.session.execute(statement, parameters)
@@ -1473,22 +1474,22 @@ class ZKTransaction:
     """
     op_id = uuid.uuid4()
     insert_marker = """
-      INSERT INTO batch_status (app, transaction, applied, op_id)
-      VALUES (%(app)s, %(transaction)s, False, %(op_id)s)
+      INSERT INTO batch_status (transaction, applied, op_id)
+      VALUES (%(transaction)s, False, %(op_id)s)
       IF NOT EXISTS
     """
     statement = SimpleStatement(insert_marker, retry_policy=NO_RETRIES)
-    parameters = {'app': app, 'transaction': txid, 'op_id': op_id}
+    parameters = {'transaction': tx_partition(app, txid), 'op_id': op_id}
 
     try:
       result = self.db_access.session.execute(statement, parameters)
     except TRANSIENT_CASSANDRA_ERRORS:
       get_status = """
         SELECT op_id FROM batch_status
-        WHERE app = %(app)s AND transaction = %(transaction)s
+        WHERE transaction = %(transaction)s
       """
       query = SimpleStatement(get_status)
-      parameters = {'app': app, 'transaction': txid}
+      parameters = {'transaction': tx_partition(app, txid)}
 
       try:
         results = self.db_access.session.execute(query, parameters=parameters)
@@ -1544,16 +1545,18 @@ class ZKTransaction:
     """
     self.logger.debug(
       'Cleaning up batch: app={}, transaction={}'.format(app, transaction))
-    parameters = {'app': app, 'transaction': transaction}
     clear_batch = """
       DELETE FROM batches
       WHERE app = %(app)s AND transaction = %(transaction)s
     """
+    parameters = {'app': app, 'transaction': transaction}
     self.db_access.session.execute(clear_batch, parameters)
+
     clear_status = """
       DELETE FROM batch_status
-      WHERE app = %(app)s AND transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
     """
+    parameters = {'transaction': tx_partition(app, transaction)}
     self.db_access.session.execute(clear_status, parameters)
 
   def resolve_batch(self, app, transaction):
@@ -1564,11 +1567,11 @@ class ZKTransaction:
       transaction: An integer containing the transaction ID.
     """
     session = self.db_access.session
-    parameters = {'app': app, 'transaction': transaction}
     select_applied = """
       SELECT applied FROM batch_status
-      WHERE app = %(app)s AND transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
     """
+    parameters = {'transaction': tx_partition(app, transaction)}
     try:
       applied = session.execute(select_applied, parameters)[0].applied
     except IndexError:
@@ -1591,6 +1594,7 @@ class ZKTransaction:
       SELECT old_value, new_value FROM batches
       WHERE app = %(app)s AND transaction = %(transaction)s
     """
+    parameters = {'app': app, 'transaction': transaction}
     results = session.execute(select_mutations, parameters)
     for result in results:
       old_entity = result.old_value

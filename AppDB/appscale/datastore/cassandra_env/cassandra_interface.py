@@ -580,10 +580,10 @@ class DatastoreProxy(AppDBInterface):
     op_id = uuid.uuid4()
 
     set_status = """
-      INSERT INTO batch_status (app, transaction, applied, op_id)
-      VALUES (%(app)s, %(transaction)s, False, %(op_id)s)
+      INSERT INTO batch_status (transaction, applied, op_id)
+      VALUES (%(transaction)s, False, %(op_id)s)
     """
-    parameters = {'app': app, 'transaction': txid, 'op_id': op_id}
+    parameters = {'transaction': tx_partition(app, txid), 'op_id': op_id}
 
     try:
       self.session.execute(set_status, parameters)
@@ -604,11 +604,11 @@ class DatastoreProxy(AppDBInterface):
     """
     get_status = """
       SELECT applied, op_id FROM batch_status
-      WHERE app = %(app)s AND transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
     """
     query = SimpleStatement(get_status, retry_policy=self.retry_policy,
                             consistency_level=ConsistencyLevel.SERIAL)
-    parameters = {'app': app, 'transaction': txid}
+    parameters = {'transaction': tx_partition(app, txid)}
 
     try:
       return self.session.execute(query, parameters=parameters)[0]
@@ -671,13 +671,12 @@ class DatastoreProxy(AppDBInterface):
     update_status = """
       UPDATE batch_status
       SET applied = True, op_id = %(op_id)s
-      WHERE app = %(app)s
-      AND transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
       IF op_id = %(op_id)s
     """
     update_status_statement = SimpleStatement(
       update_status, retry_policy=self.no_retries)
-    parameters = {'app': app, 'transaction': txid, 'op_id': op_id}
+    parameters = {'transaction': tx_partition(app, txid), 'op_id': op_id}
 
     try:
       result = self.session.execute(update_status_statement, parameters)
@@ -745,9 +744,9 @@ class DatastoreProxy(AppDBInterface):
 
     clear_status = """
       DELETE FROM batch_status
-      WHERE app = %(app)s and transaction = %(transaction)s
+      WHERE transaction = %(transaction)s
     """
-    parameters = {'app': app, 'transaction': txn}
+    parameters = {'transaction': tx_partition(app, txn)}
     try:
       self.session.execute(clear_status, parameters)
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:

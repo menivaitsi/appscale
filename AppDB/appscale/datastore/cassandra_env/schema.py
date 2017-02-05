@@ -87,11 +87,9 @@ def create_batch_tables(cluster, session):
   logging.info('Trying to create batch_status')
   create_table = """
     CREATE TABLE IF NOT EXISTS batch_status (
-      app text,
-      transaction int,
+      transaction blob PRIMARY KEY,
       applied boolean,
-      op_id uuid,
-      PRIMARY KEY ((app), transaction)
+      op_id uuid
     )
   """
   statement = SimpleStatement(create_table, retry_policy=NO_RETRIES)
