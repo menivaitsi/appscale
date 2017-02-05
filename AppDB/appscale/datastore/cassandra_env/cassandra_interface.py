@@ -592,33 +592,88 @@ class DatastoreProxy(AppDBInterface):
 
     return op_id
 
-    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
-      message = 'Exception during large batch'
-      logging.exception(message)
-      raise AppScaleDBConnectionError(message)
-
-    if not result.was_applied:
-      raise FailedBatch('A batch for transaction {} already exists'.
-                        format(txid))
-
-  def _update_large_batch(self, app, txid, retries=5):
-    """ Mark a given large batch as being completed.
+  def _get_batch_status(self, app, txid, retries=5):
+    """ Fetch the status of a large batch.
 
     Args:
       app: A string containing the application ID.
       txid: An integer specifying the transaction ID.
       retries: The number of times to retry after failures.
+    Returns:
+      A cassandra-driver result set.
+    """
+    get_status = """
+      SELECT applied, op_id FROM batch_status
+      WHERE app = %(app)s AND transaction = %(transaction)s
+    """
+    query = SimpleStatement(get_status, retry_policy=self.retry_policy,
+                            consistency_level=ConsistencyLevel.SERIAL)
+    parameters = {'app': app, 'transaction': txid}
+
+    try:
+      return self.session.execute(query, parameters=parameters)[0]
+    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
+      retries_left = retries - 1
+      if retries_left < 0:
+        raise
+
+      self.logger.debug('Unable to read batch status. Retrying.')
+      return self._get_batch_status(app, txid, retries=retries_left)
+    except IndexError:
+      raise dbconstants.BatchNotFound('No batch found for {}'.format(txid))
+
+  def _get_and_check_update(self, app, txid, op_id, retries):
+    """ Fetch batch status and check if it was updated properly.
+
+    Args:
+      app: A string containing the application ID.
+      txid: An integer specifying the transaction ID.
+      op_id: A uuid4 that identifies this process.
+      retries: The number of times to retry after failures.
+    Returns:
+      A uuid4 that identifies this process.
+    Raises:
+      FailedBatch if the batch was modified by another process.
+    """
+    try:
+      select_result = self._get_batch_status(app, txid)
+    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
+      self.logger.debug('Batch may not have started. Retrying.')
+      return self._update_large_batch(app, txid, op_id, retries=retries - 1)
+    except dbconstants.BatchNotFound:
+      raise FailedBatch('Another process modified batch for transaction {}'.
+                        format(txid))
+
+    if select_result.op_id != op_id:
+      raise FailedBatch('Another process modified batch for transaction {}'.
+                        format(txid))
+
+    if select_result.applied == False:
+      return self._update_large_batch(app, txid, op_id, retries=retries - 1)
+
+    self.logger.debug('Batch status update was already applied.')
+    return
+
+  def _update_large_batch(self, app, txid, op_id, retries=5):
+    """ Mark a given large batch as being completed.
+
+    Args:
+      app: A string containing the application ID.
+      txid: An integer specifying the transaction ID.
+      op_id: A uuid4 that identifies the process that started the batch.
+      retries: The number of times to retry after failures.
     Raises:
       FailedBatch if the batch cannot be marked as completed.
     """
-    op_id = uuid.uuid4()
+    if retries < 0:
+      raise FailedBatch('Retries exhausted while updating batch')
 
     update_status = """
       UPDATE batch_status
       SET applied = True, op_id = %(op_id)s
       WHERE app = %(app)s
       AND transaction = %(transaction)s
-      IF applied = False
+      IF op_id = %(op_id)s
     """
     update_status_statement = SimpleStatement(
       update_status, retry_policy=self.no_retries)
@@ -626,50 +681,13 @@ class DatastoreProxy(AppDBInterface):
 
     try:
       result = self.session.execute(update_status_statement, parameters)
-    except cassandra.WriteTimeout:
-      get_status = """
-        SELECT applied, op_id FROM batch_status
-        WHERE app = %(app)s AND transaction = %(transaction)s
-      """
-      query = SimpleStatement(get_status, retry_policy=self.retry_policy,
-                              consistency_level=ConsistencyLevel.SERIAL)
-      parameters = {'app': app, 'transaction': txid}
-
-      try:
-        results = self.session.execute(query, parameters=parameters)
-      except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
-        message = 'Exception when trying to read batch status'
-        logging.exception(message)
-        raise AppScaleDBConnectionError(message)
-
-      try:
-        select_result = results[0]
-      except IndexError:
-        raise FailedBatch('Another process modified batch for transaction {}'.
-                          format(txid))
-
-      if select_result.op_id == op_id:
-        self.logger.debug('Batch status update was already applied.')
-        return
-
-      if select_result.applied:
-        raise FailedBatch('Another process modified batch for transaction {}'.
-                          format(txid))
-
-      retries_left = retries - 1
-      if retries_left < 1:
-        raise FailedBatch('Retries exhausted while updating batch')
-
-      self.logger.debug('Batch was not updated. Retrying.')
-      return self._update_large_batch(app, txid, retries=retries_left)
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
-      message = 'Exception during large batch'
-      logging.exception(message)
-      raise AppScaleDBConnectionError(message)
+      return self._get_and_check_update(app, txid, op_id, retries)
 
-    if not result.was_applied:
-      raise FailedBatch('Another process modified batch for transaction {}'.
-                        format(txid))
+    if result.was_applied:
+      return
+
+    return self._get_and_check_update(app, txid, op_id, retries)
 
   def _large_batch(self, app, mutations, entity_changes, txn):
     """ Insert or delete multiple rows across tables in an atomic statement.
@@ -685,7 +703,7 @@ class DatastoreProxy(AppDBInterface):
     """
     self.logger.debug('Large batch: transaction {}, {} mutations'.
                       format(txn, len(mutations)))
-    self._start_large_batch(app, txn)
+    op_id = self._start_large_batch(app, txn)
 
     insert_item = """
       INSERT INTO batches (app, transaction, namespace, path,
@@ -716,7 +734,7 @@ class DatastoreProxy(AppDBInterface):
       logging.exception(message)
       raise AppScaleDBConnectionError(message)
 
-    self._update_large_batch(app, txn)
+    self._update_large_batch(app, txn, op_id)
 
     try:
       self.apply_mutations(mutations)

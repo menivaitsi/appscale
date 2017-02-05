@@ -212,6 +212,10 @@ class BatchInProgress(Exception):
   """ Indicates that a concurrent process is working on a batch. """
   pass
 
+class BatchNotFound(Exception):
+  """ Indicates that no entries were found for a given batch. """
+  pass
+
 class ConcurrentModificationException(Exception):
   """ Indicates that an entity fetched during a transaction has changed. """
   pass
