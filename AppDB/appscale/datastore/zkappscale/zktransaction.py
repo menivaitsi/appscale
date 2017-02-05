@@ -19,6 +19,7 @@ from ..dbconstants import (AppScaleDBConnectionError,
                            MAX_GROUPS_FOR_XG,
                            MAX_TX_DURATION)
 from ..unpackaged import APPSCALE_PYTHON_APPSERVER
+from ..utils import tx_partition
 
 from cassandra.policies import FallthroughRetryPolicy
 from kazoo.exceptions import (NoNodeError,
