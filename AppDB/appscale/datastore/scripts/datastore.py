@@ -24,6 +24,7 @@ from ..utils import clean_app_id
 from ..utils import UnprocessedQueryResult
 from ..unpackaged import APPSCALE_LIB_DIR
 from ..unpackaged import APPSCALE_PYTHON_APPSERVER
+from ..zkappscale import entity_lock
 from ..zkappscale import zktransaction
 
 sys.path.append(APPSCALE_LIB_DIR)
@@ -585,7 +586,8 @@ class MainHandler(tornado.web.RequestHandler):
       return (putresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on put.")
-
+    except entity_lock.LockTimeout as error:
+      return putresp_pb.Encode(), datastore_pb.Error.TIMEOUT, str(error)
     
   def get_request(self, app_id, http_request_data):
     """ High level function for doing gets.
@@ -669,6 +671,8 @@ class MainHandler(tornado.web.RequestHandler):
       return (delresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on delete.")
+    except entity_lock.LockTimeout as error:
+      return delresp_pb.Encode(), datastore_pb.Error.TIMEOUT, str(error)
 
   def add_actions_request(self, app_id, http_request_data):
     """ High level function for adding transactional tasks.
