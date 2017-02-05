@@ -563,64 +563,35 @@ class DatastoreProxy(AppDBInterface):
     execute_concurrent(self.session, statements_and_params,
                        raise_on_first_error=True)
 
-  def _start_large_batch(self, app, txid, retries=5):
+  def _start_large_batch(self, app, txid):
     """ Mark a given large batch as being in progress.
 
     Args:
       app: A string containing the application ID.
       txid: An integer specifying the transaction ID.
-      retries: The number of times to retry after failures.
+      op_id: A uuid4 that identifies this process.
+    Returns:
+      A uuid4 that identifies this process.
     Raises:
       FailedBatch if the batch cannot be marked as being started.
     """
-    # Give the LWT an operation ID so that it's possible to check its status
-    # after a write timeout.
+    # Give the entry an operation ID so that it's possible to keep track of
+    # whether or not another process changed it.
     op_id = uuid.uuid4()
 
     set_status = """
       INSERT INTO batch_status (app, transaction, applied, op_id)
       VALUES (%(app)s, %(transaction)s, False, %(op_id)s)
-      IF NOT EXISTS
     """
-    set_status_statement = SimpleStatement(
-      set_status, retry_policy=self.no_retries)
     parameters = {'app': app, 'transaction': txid, 'op_id': op_id}
 
     try:
-      result = self.session.execute(set_status_statement, parameters)
-    except cassandra.WriteTimeout:
-      self.logger.debug('Write timeout during op {}'.format(op_id))
-      get_status = """
-        SELECT op_id FROM batch_status
-        WHERE app = %(app)s AND transaction = %(transaction)s
-      """
-      query = SimpleStatement(get_status, retry_policy=self.retry_policy,
-                              consistency_level=ConsistencyLevel.SERIAL)
-      parameters = {'app': app, 'transaction': txid}
+      self.session.execute(set_status, parameters)
+    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
+      raise FailedBatch('Unable to start batch for {}'.format(txid))
 
-      try:
-        results = self.session.execute(query, parameters=parameters)
-      except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
-        message = 'Exception when trying to read batch status'
-        logging.exception(message)
-        raise AppScaleDBConnectionError(message)
+    return op_id
 
-      try:
-        select_result = results[0]
-      except IndexError:
-        retries_left = retries - 1
-        if retries_left < 1:
-          raise FailedBatch('Retries exhausted while starting batch')
-        self.logger.debug('Batch was not started. Retrying.')
-        return self._start_large_batch(app, txid, retries=retries_left)
-
-      if select_result.op_id == op_id:
-        self.logger.debug('Batch start was already applied.')
-        return
-
-      self.logger.debug('Selected op_id was {}'.format(select_result.op_id))
-      raise FailedBatch('A batch for transaction {} already exists'.
-                        format(txid))
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
       message = 'Exception during large batch'
       logging.exception(message)
