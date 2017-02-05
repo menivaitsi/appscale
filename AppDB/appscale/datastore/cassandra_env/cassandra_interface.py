@@ -730,7 +730,7 @@ class DatastoreProxy(AppDBInterface):
       execute_concurrent(self.session, statements_and_params,
                          raise_on_first_error=True)
     except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
-      message = 'Exception during large batch'
+      message = 'Unable to write large batch log'
       logging.exception(message)
       raise AppScaleDBConnectionError(message)
 
@@ -743,19 +743,25 @@ class DatastoreProxy(AppDBInterface):
       logging.exception(message)
       raise AppScaleDBConnectionError(message)
 
-    clear_batch = """
-      DELETE FROM batches
-      WHERE app = %(app)s AND transaction = %(transaction)s
-    """
-    parameters = {'app': app, 'transaction': txn}
-    self.session.execute(clear_batch, parameters)
-
     clear_status = """
       DELETE FROM batch_status
       WHERE app = %(app)s and transaction = %(transaction)s
     """
     parameters = {'app': app, 'transaction': txn}
-    self.session.execute(clear_status, parameters)
+    try:
+      self.session.execute(clear_status, parameters)
+    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
+      logging.exception('Unable to clear batch status')
+
+    clear_batch = """
+      DELETE FROM batches
+      WHERE app = %(app)s AND transaction = %(transaction)s
+    """
+    parameters = {'app': app, 'transaction': txn}
+    try:
+      self.session.execute(clear_batch, parameters)
+    except dbconstants.TRANSIENT_CASSANDRA_ERRORS:
+      logging.exception('Unable to clear batch log')
 
   def batch_mutate(self, app, mutations, entity_changes, txn):
     """ Insert or delete multiple rows across tables in an atomic statement.
