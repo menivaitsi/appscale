@@ -1615,7 +1615,7 @@ class ZKTransaction:
       else:
         mutations = cassandra_interface.mutations_for_entity(
           new_entity, transaction, old_entity, composite_indices)
-      self.db_access.apply_mutations(mutations)
+      self.db_access.apply_mutations(mutations, transaction)
 
     self.clean_up_batch(app, transaction)
 
