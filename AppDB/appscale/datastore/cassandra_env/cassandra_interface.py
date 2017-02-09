@@ -407,7 +407,7 @@ class DatastoreProxy(AppDBInterface):
       logging.exception(message)
       raise AppScaleDBConnectionError(message)
 
-  def prepare_insert(self, table, txid):
+  def prepare_insert(self, table):
     """ Prepare an insert statement.
 
     Args:
@@ -418,15 +418,14 @@ class DatastoreProxy(AppDBInterface):
     statement = """
       INSERT INTO "{table}" ({key}, {column}, {value})
       VALUES (?, ?, ?)
-      USING TIMESTAMP {ts}
+      USING TIMESTAMP ?
     """.format(table=table,
                key=ThriftColumn.KEY,
                column=ThriftColumn.COLUMN_NAME,
-               value=ThriftColumn.VALUE,
-               ts=txid)
+               value=ThriftColumn.VALUE)
     return self.session.prepare(statement)
 
-  def prepare_delete(self, table, txid):
+  def prepare_delete(self, table):
     """ Prepare a delete statement.
 
     Args:
@@ -435,9 +434,10 @@ class DatastoreProxy(AppDBInterface):
       A PreparedStatement object.
     """
     statement = """
-      DELETE FROM "{table}" WHERE {key} = ?
-      USING TIMESTAMP {ts}
-    """.format(table=table, key=ThriftColumn.KEY, ts=txid)
+      DELETE FROM "{table}"
+      USING TIMESTAMP ?
+      WHERE {key} = ?
+    """.format(table=table, key=ThriftColumn.KEY)
     return self.session.prepare(statement)
 
   def _normal_batch(self, mutations, txid):
@@ -446,6 +446,9 @@ class DatastoreProxy(AppDBInterface):
     Args:
       mutations: A list of dictionaries representing mutations.
     """
+    # The Python Cassandra driver requires datetime objects for timestamps.
+    txid_time = datetime.datetime.fromtimestamp(txid / 1e6)
+
     self.logger.debug('Normal batch: {} mutations'.format(len(mutations)))
     batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM,
                            retry_policy=BASIC_RETRIES)
@@ -458,28 +461,29 @@ class DatastoreProxy(AppDBInterface):
         insert = """
           INSERT INTO group_updates (group, last_update)
           VALUES (%(group)s, %(last_update)s)
+          USING TIMESTAMP %(timestamp)s
         """
-        parameters = {'group': key, 'last_update': mutation['last_update']}
+        parameters = {'group': key, 'last_update': mutation['last_update'],
+                      'timestamp': txid_time}
         batch.add(insert, parameters)
         continue
 
       if mutation['operation'] == Operations.PUT:
         if table not in prepared_statements['insert']:
-          prepared_statements['insert'][table] = self.prepare_insert(table,
-                                                                     txid)
+          prepared_statements['insert'][table] = self.prepare_insert(table)
         values = mutation['values']
         for column in values:
           batch.add(
             prepared_statements['insert'][table],
-            (bytearray(mutation['key']), column, bytearray(values[column]))
+            (bytearray(mutation['key']), column, bytearray(values[column]),
+             txid)
           )
       elif mutation['operation'] == Operations.DELETE:
         if table not in prepared_statements['delete']:
-          prepared_statements['delete'][table] = self.prepare_delete(table,
-                                                                     txid)
+          prepared_statements['delete'][table] = self.prepare_delete(table)
         batch.add(
           prepared_statements['delete'][table],
-          (bytearray(mutation['key']),)
+          (txid, bytearray(mutation['key']))
         )
 
     try:
@@ -495,6 +499,9 @@ class DatastoreProxy(AppDBInterface):
     Args:
       mutations: A list of dictionaries representing mutations.
     """
+    # The Python Cassandra driver requires datetime objects for timestamps.
+    txid_time = datetime.datetime.fromtimestamp(txid / 1e6)
+
     prepared_statements = {'insert': {}, 'delete': {}}
     statements_and_params = []
     for mutation in mutations:
@@ -505,27 +512,26 @@ class DatastoreProxy(AppDBInterface):
         insert = """
           INSERT INTO group_updates (group, last_update)
           VALUES (%(group)s, %(last_update)s)
-          USING TIMESTAMP {ts}
-        """.format(ts=txid)
-        parameters = {'group': key, 'last_update': mutation['last_update']}
+          USING TIMESTAMP %(timestamp)s
+        """
+        parameters = {'group': key, 'last_update': mutation['last_update'],
+                      'timestamp': txid_time}
         statements_and_params.append((SimpleStatement(insert), parameters))
         continue
 
       if mutation['operation'] == Operations.PUT:
         if table not in prepared_statements['insert']:
-          prepared_statements['insert'][table] = self.prepare_insert(table,
-                                                                     txid)
+          prepared_statements['insert'][table] = self.prepare_insert(table)
         values = mutation['values']
         for column in values:
           params = (bytearray(mutation['key']), column,
-                    bytearray(values[column]))
+                    bytearray(values[column]), txid)
           statements_and_params.append(
             (prepared_statements['insert'][table], params))
       elif mutation['operation'] == Operations.DELETE:
         if table not in prepared_statements['delete']:
-          prepared_statements['delete'][table] = self.prepare_delete(table,
-                                                                     txid)
-        params = (bytearray(mutation['key']),)
+          prepared_statements['delete'][table] = self.prepare_delete(table)
+        params = (txid, bytearray(mutation['key']))
         statements_and_params.append(
           (prepared_statements['delete'][table], params))
 
