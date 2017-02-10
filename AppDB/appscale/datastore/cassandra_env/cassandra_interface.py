@@ -485,9 +485,6 @@ class DatastoreProxy(AppDBInterface):
     Args:
       mutations: A list of dictionaries representing mutations.
     """
-    # The Python Cassandra driver requires datetime objects for timestamps.
-    txid_time = datetime.datetime.fromtimestamp(txid / 1e6)
-
     self.logger.debug('Normal batch: {} mutations'.format(len(mutations)))
     batch = BatchStatement(consistency_level=ConsistencyLevel.QUORUM,
                            retry_policy=self.retry_policy)
@@ -503,7 +500,7 @@ class DatastoreProxy(AppDBInterface):
           USING TIMESTAMP %(timestamp)s
         """
         parameters = {'group': key, 'last_update': mutation['last_update'],
-                      'timestamp': txid_time}
+                      'timestamp': txid}
         batch.add(insert, parameters)
         continue
 
@@ -538,9 +535,6 @@ class DatastoreProxy(AppDBInterface):
     Args:
       mutations: A list of dictionaries representing mutations.
     """
-    # The Python Cassandra driver requires datetime objects for timestamps.
-    txid_time = datetime.datetime.fromtimestamp(txid / 1e6)
-
     prepared_statements = {'insert': {}, 'delete': {}}
     statements_and_params = []
     for mutation in mutations:
@@ -554,7 +548,7 @@ class DatastoreProxy(AppDBInterface):
           USING TIMESTAMP %(timestamp)s
         """
         parameters = {'group': key, 'last_update': mutation['last_update'],
-                      'timestamp': txid_time}
+                      'timestamp': txid}
         statements_and_params.append((SimpleStatement(insert), parameters))
         continue
 
