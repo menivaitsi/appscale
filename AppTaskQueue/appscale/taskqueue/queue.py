@@ -819,11 +819,11 @@ class PullQueue(Queue):
                                  raise_on_first_error=False)
 
     # Check which lease operations succeeded.
-    select = """
+    select = SimpleStatement("""
       SELECT payload, enqueued, retry_count, tag
       FROM pull_queue_tasks
       WHERE app = %(app)s AND queue = %(queue)s AND id = %(id)s
-    """
+    """, consistency_level=ConsistencyLevel.SERIAL)
     for result_num, (success, result) in enumerate(results):
       if success and not result.was_applied:
         # Associate this index with the failed lease operation.
@@ -832,8 +832,7 @@ class PullQueue(Queue):
       index = indexes[result_num]
       params = {'app': self.app, 'queue': self.name, 'id': index.id}
       try:
-        read_result = session.execute(
-          select, params, consistency_level=ConsistencyLevel.SERIAL)[0]
+        read_result = session.execute(select, params)[0]
       except TRANSIENT_CASSANDRA_ERRORS:
         raise TransientError('Unable to read task {}'.format(index.id))
 
