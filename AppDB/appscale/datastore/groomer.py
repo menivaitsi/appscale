@@ -1128,6 +1128,9 @@ class DatastoreGroomer(threading.Thread):
     """ Runs the grooming process. Loops on the entire dataset sequentially
         and updates stats, indexes, and transactions.
     """
+    # The groomer should not run on this deployment.
+    return
+
     self.db_access = appscale_datastore_batch.DatastoreFactory.getDatastore(
       self.table_name)
     self.ds_access = DatastoreDistributed(

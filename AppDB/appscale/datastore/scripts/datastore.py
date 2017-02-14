@@ -25,6 +25,7 @@ from ..utils import (clean_app_id,
                      UnprocessedQueryResult)
 from ..unpackaged import APPSCALE_LIB_DIR
 from ..unpackaged import APPSCALE_PYTHON_APPSERVER
+from ..zkappscale import entity_lock
 from ..zkappscale import zktransaction
 
 sys.path.append(APPSCALE_LIB_DIR)
@@ -266,15 +267,15 @@ class MainHandler(tornado.web.RequestHandler):
 
     try:
       handle = datastore_access.setup_transaction(app_id, multiple_eg)
-    except zktransaction.ZKInternalException:
-      logger.exception('Unable to begin {}'.format(transaction_pb))
-      return (transaction_pb.Encode(),
-              datastore_pb.Error.INTERNAL_ERROR, 
-              "Internal error with ZooKeeper connection.")
+    except (zktransaction.ZKInternalException,
+            dbconstants.AppScaleDBConnectionError) as error:
+      logger.exception('Unable to begin transaction')
+      return (transaction_pb.Encode(), datastore_pb.Error.INTERNAL_ERROR,
+              str(error))
 
     transaction_pb.set_app(app_id)
     transaction_pb.set_handle(handle)
-    return (transaction_pb.Encode(), 0, "")
+    return transaction_pb.Encode(), 0, ""
 
   def commit_transaction_request(self, app_id, http_request_data):
     """ Handles the commit phase of a transaction.
@@ -569,11 +570,10 @@ class MainHandler(tornado.web.RequestHandler):
       return (putresp_pb.Encode(),
             datastore_pb.Error.BAD_REQUEST, 
             "Illegal arguments for transaction. {0}".format(str(zkie)))
-    except zktransaction.ZKInternalException:
-      logger.exception('ZKInternalException during {}'.format(putreq_pb))
-      return (putresp_pb.Encode(),
-              datastore_pb.Error.INTERNAL_ERROR, 
-              "Internal error with ZooKeeper connection.")
+    except zktransaction.ZKInternalException as zk_error:
+      logger.exception('ZKInternalException during put')
+      return (putresp_pb.Encode(), datastore_pb.Error.INTERNAL_ERROR,
+              str(zk_error))
     except zktransaction.ZKTransactionException:
       logger.exception('Concurrent transaction during {}'.
         format(putreq_pb))
@@ -581,11 +581,12 @@ class MainHandler(tornado.web.RequestHandler):
               datastore_pb.Error.CONCURRENT_TRANSACTION, 
               "Concurrent transaction exception on put.")
     except dbconstants.AppScaleDBConnectionError:
-      logger.exception('DB connection error during {}'.format(putreq_pb))
+      logger.exception('DB connection error during put')
       return (putresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on put.")
-
+    except entity_lock.LockTimeout as error:
+      return putresp_pb.Encode(), datastore_pb.Error.TIMEOUT, str(error)
     
   def get_request(self, app_id, http_request_data):
     """ High level function for doing gets.
@@ -669,6 +670,8 @@ class MainHandler(tornado.web.RequestHandler):
       return (delresp_pb.Encode(),
               datastore_pb.Error.INTERNAL_ERROR,
               "Datastore connection error on delete.")
+    except entity_lock.LockTimeout as error:
+      return delresp_pb.Encode(), datastore_pb.Error.TIMEOUT, str(error)
 
   def add_actions_request(self, app_id, http_request_data):
     """ High level function for adding transactional tasks.
