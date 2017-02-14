@@ -41,7 +41,7 @@ module DatastoreServer
   # datastore servers to this value.
   DEFAULT_NUM_SERVERS = 3
 
-  # Datastore server processes to core multipler.
+  # Datastore server processes to core multiplier.
   MULTIPLIER = 2
 
   # Starts a Datastore Server on this machine. We don't want to monitor
@@ -72,15 +72,6 @@ module DatastoreServer
   # managed by monit, just tell monit to shut it down.
   def self.stop()
      MonitInterface.stop(:datastore_server)
-  end
-
-  # The following are needed to comply to the djinn calling in
-  # stop_db_master and stop_db_slave.
-  def self.stop_db_master(table)
-    MonitInterface.stop(:datastore_server)
-  end
-  def self.stop_db_slave(table)
-    MonitInterface.stop(:datastore_server)
   end
 
   # Restarts the Datastore Buffer Server on this machine by doing a hard

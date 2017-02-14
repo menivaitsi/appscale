@@ -56,6 +56,9 @@ class DjinnServer < SOAP::RPC::HTTPServer
 
     # Expose AppController methods to the outside world
     add_method(@djinn, "is_done_initializing", "secret")
+    add_method(@djinn, "receive_server_message", "timeout", "secret")
+    add_method(@djinn, "is_appscale_terminated", "secret")
+    add_method(@djinn, "run_terminate", "clean", "secret")
     add_method(@djinn, "is_done_loading", "secret")
     add_method(@djinn, "get_role_info", "secret")
     add_method(@djinn, "get_app_info_map", "secret")
@@ -80,8 +83,6 @@ class DjinnServer < SOAP::RPC::HTTPServer
     add_method(@djinn, "done_uploading", "appname", "location", "secret")
     add_method(@djinn, "is_app_running", "appname", "secret")
     add_method(@djinn, "backup_appscale", "backup_in_info", "secret")
-    add_method(@djinn, "add_role", "new_role", "secret")
-    add_method(@djinn, "remove_role", "old_role", "secret")
     add_method(@djinn, "start_roles_on_nodes", "ips_hash", "secret")
     add_method(@djinn, "gather_logs", "secret")
     add_method(@djinn, "add_routing_for_appserver", "app_id", "ip", "port",

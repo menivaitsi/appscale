@@ -17,11 +17,11 @@ module TerminateHelper
     `rm -f /etc/nginx/sites-enabled/appscale-*.conf`
     `rm -f /etc/haproxy/sites-enabled/*.cfg`
     `service nginx reload`
-    # Stop and then remove the service we configured with monit.
-    `monit stop all`
     while system("monit summary | grep Running > /dev/null") do
+      # Stop and then remove the service we configured with monit.
+      `monit stop all`
       puts "Waiting for monit to stop services ..."
-      Kernel.sleep(2)
+      Kernel.sleep(10)
     end
 
     `rm -f /etc/monit/conf.d/appscale*.cfg`
@@ -52,6 +52,7 @@ module TerminateHelper
     `rm -rf #{APPSCALE_CONFIG_DIR}/zookeeper_locations.json`
     `rm -f /opt/appscale/appcontroller-state.json`
     `rm -f /opt/appscale/appserver-state.json`
+    print "OK"
   end
 
   # This functions does erase more of appscale state: used in combination
@@ -77,6 +78,7 @@ module TerminateHelper
     `rm -rf /var/lib/rabbitmq/*`
     `rm -rf /etc/appscale/celery/`
     `rm -rf /opt/appscale/celery`
+    print "OK"
   end
 
   # Tells any services that persist data across AppScale runs to stop writing

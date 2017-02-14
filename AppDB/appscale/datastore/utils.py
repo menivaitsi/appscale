@@ -13,13 +13,21 @@ from .dbconstants import AppScaleDBConnectionError
 from .dbconstants import ID_KEY_LENGTH
 from .dbconstants import METADATA_TABLE
 from .dbconstants import TERMINATING_STRING
-from .unpackaged import APPSCALE_PYTHON_APPSERVER
+from .unpackaged import (APPSCALE_LIB_DIR,
+                         APPSCALE_PYTHON_APPSERVER)
+
+sys.path.append(APPSCALE_LIB_DIR)
+from constants import LOG_FORMAT
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import appscale_stub_util
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import entity_pb
 from google.appengine.datastore import sortable_pb_encoder
+
+
+logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+logger = logging.getLogger('appscale-datastore')
 
 
 def clean_app_id(app_id):
@@ -564,6 +572,10 @@ def group_for_key(key):
   # Avoid modifying the original object.
   key_copy = entity_pb.Reference()
   key_copy.CopyFrom(key)
+
+  # Groups without a namespace should match groups with an empty namespace.
+  if not key_copy.name_space():
+    key_copy.set_name_space('')
 
   key_copy.path().clear_element()
   element = key_copy.path().add_element()
