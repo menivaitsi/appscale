@@ -828,6 +828,7 @@ class PullQueue(Queue):
       if success and not result.was_applied:
         # Associate this index with the failed lease operation.
         leased.append(None)
+        continue
 
       index = indexes[result_num]
       params = {'app': self.app, 'queue': self.name, 'id': index.id}
@@ -839,17 +840,18 @@ class PullQueue(Queue):
       # It would be better to use an ID here to check if the lease succeeded.
       if not success and read_result.lease_expires != new_eta:
         leased.append(None)
+        continue
 
       task_info = {
         'queueName': self.name,
         'id': index.id,
-        'payloadBase64': result.payload,
-        'enqueueTimestamp': result.enqueued,
+        'payloadBase64': read_result.payload,
+        'enqueueTimestamp': read_result.enqueued,
         'leaseTimestamp': new_eta,
-        'retry_count': result.retry_count
+        'retry_count': read_result.retry_count
       }
-      if result.tag:
-        task_info['tag'] = result.tag
+      if read_result.tag:
+        task_info['tag'] = read_result.tag
       task = Task(task_info)
       leased.append(task)
 
