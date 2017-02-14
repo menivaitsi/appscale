@@ -834,7 +834,12 @@ class PullQueue(Queue):
       params = {'app': self.app, 'queue': self.name, 'id': index.id}
       try:
         read_result = session.execute(select, params)[0]
-      except TRANSIENT_CASSANDRA_ERRORS:
+      except (TRANSIENT_CASSANDRA_ERRORS, IndexError):
+        raise TransientError('Unable to read task {}'.format(index.id))
+      except IndexError:
+        if success and not result.was_applied:
+          leased.append(None)
+          continue
         raise TransientError('Unable to read task {}'.format(index.id))
 
       # It would be better to use an ID here to check if the lease succeeded.
