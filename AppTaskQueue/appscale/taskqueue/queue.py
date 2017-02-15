@@ -832,7 +832,7 @@ class PullQueue(Queue):
 
       index = indexes[result_num]
       params = {'app': self.app, 'queue': self.name, 'id': index.id}
-      future = session.execute_async(select, params)[0]
+      future = session.execute_async(select, params)
       futures[result_num] = (future, not success)
 
     for result_num, (future, lease_timed_out) in futures.iteritems():
