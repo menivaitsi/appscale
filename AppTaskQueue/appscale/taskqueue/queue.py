@@ -798,7 +798,7 @@ class PullQueue(Queue):
     self.db_access.session.execute_async(update_count, params)
 
   def _lease_batch(self, indexes, new_eta):
-    leased = []
+    leased = [None for _ in indexes]
     session = self.db_access.session
 
     lease_statement = """
@@ -824,27 +824,26 @@ class PullQueue(Queue):
       FROM pull_queue_tasks
       WHERE app = %(app)s AND queue = %(queue)s AND id = %(id)s
     """, consistency_level=ConsistencyLevel.SERIAL)
+    futures = {}
     for result_num, (success, result) in enumerate(results):
       if success and not result.was_applied:
-        # Associate this index with the failed lease operation.
-        leased.append(None)
+        # The lease operation failed, so keep this index as None.
         continue
 
       index = indexes[result_num]
       params = {'app': self.app, 'queue': self.name, 'id': index.id}
+      future = session.execute_async(select, params)[0]
+      futures[result_num] = (future, not success)
+
+    for result_num, (future, lease_timed_out) in futures.iteritems():
+      index = indexes[result_num]
       try:
-        read_result = session.execute(select, params)[0]
+        read_result = future.result()[0]
       except (TRANSIENT_CASSANDRA_ERRORS, IndexError):
-        raise TransientError('Unable to read task {}'.format(index.id))
-      except IndexError:
-        if success and not result.was_applied:
-          leased.append(None)
-          continue
         raise TransientError('Unable to read task {}'.format(index.id))
 
       # It would be better to use an ID here to check if the lease succeeded.
-      if not success and read_result.lease_expires != new_eta:
-        leased.append(None)
+      if lease_timed_out and read_result.lease_expires != new_eta:
         continue
 
       task_info = {
@@ -858,7 +857,7 @@ class PullQueue(Queue):
       if read_result.tag:
         task_info['tag'] = read_result.tag
       task = Task(task_info)
-      leased.append(task)
+      leased[result_num] = task
 
       self._increment_count_async(task)
       self._update_index(index, task)
