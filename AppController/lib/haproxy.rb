@@ -152,7 +152,7 @@ module HAProxy
         servers << {'ip' => server, 'port' => port}
       }
     }
-    self.create_app_config(servers, "localhost", listen_port, DatastoreServer::NAME)
+    self.create_app_config(servers, '*', listen_port, DatastoreServer::NAME)
   end
 
   # Create the config file for TaskQueue servers.
