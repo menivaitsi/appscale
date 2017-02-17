@@ -3099,7 +3099,9 @@ class Djinn
         all_db_private_ips.push(node.private_ip)
       end
     }
-    Nginx.create_datastore_server_config(all_db_private_ips, DatastoreServer::PROXY_PORT)
+#    Nginx.create_datastore_server_config(all_db_private_ips, DatastoreServer::PROXY_PORT)
+    HAProxy.create_datastore_server_config(all_db_private_ips, my_node.private_ip, DatastoreServer::PROXY_PORT)
+
   end
 
   # Creates HAProxy configuration for the TaskQueue REST API.
@@ -3112,6 +3114,8 @@ class Djinn
     }
     HAProxy.create_tq_endpoint_config(all_tq_ips, my_node.private_ip,
                                       TaskQueue::HAPROXY_REST_PORT)
+    HAProxy.create_tq_server_config(all_tq_ips, my_node.private_ip,
+                                    TaskQueue::HAPROXY_PORT)
 
     # We don't need Nginx for backend TaskQueue servers, only for REST support.
     Nginx.create_taskqueue_rest_config(my_node.private_ip)
@@ -3906,8 +3910,6 @@ class Djinn
   def start_taskqueue_master()
     verbose = @options['verbose'].downcase == "true"
     TaskQueue.start_master(false, verbose)
-    HAProxy.create_tq_server_config(my_node.private_ip,
-                                    TaskQueue::HAPROXY_PORT)
     return true
   end
 
@@ -3926,8 +3928,6 @@ class Djinn
 
     verbose = @options['verbose'].downcase == "true"
     TaskQueue.start_slave(master_ip, false, verbose)
-    HAProxy.create_tq_server_config(my_node.private_ip,
-                                    TaskQueue::HAPROXY_PORT)
     return true
   end
 
@@ -4008,7 +4008,7 @@ class Djinn
 
     table = @options['table']
     DatastoreServer.start(db_master_ip, my_node.private_ip, table, verbose)
-    HAProxy.create_datastore_server_config(my_node.private_ip, DatastoreServer::PROXY_PORT, table)
+#    HAProxy.create_datastore_server_config(my_node.private_ip, DatastoreServer::PROXY_PORT, table)
 
     # Let's wait for the datastore to be active.
     HelperFunctions.sleep_until_port_is_open(my_node.private_ip, DatastoreServer::PROXY_PORT)
@@ -4357,8 +4357,7 @@ class Djinn
       memcache_ips << node.private_ip if node.is_memcache?
       search_ips << node.private_ip if node.is_search?
       slave_ips << node.private_ip if node.is_db_slave?
-      taskqueue_ips << node.private_ip if node.is_taskqueue_master? ||
-        node.is_taskqueue_slave?
+      taskqueue_ips << node.private_ip if node.is_load_balancer?
     }
     slave_ips << master_ips[0] if slave_ips.empty?
 
