@@ -8,7 +8,7 @@ sys.path.append(APPSCALE_LIB_DIR)
 import file_io
 
 # The FS location which contains the nearest RabbitMQ server
-RABBITMQ_LOCATION_FILE = '/etc/appscale/taskqueue_nodes'
+RABBITMQ_LOCATION_FILE = '/etc/appscale/my_private_ip'
 
 # The port required to connect to RabbitMQ
 RABBITMQ_PORT = 5672
