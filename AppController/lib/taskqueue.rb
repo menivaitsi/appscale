@@ -67,7 +67,7 @@ module TaskQueue
   OPTIONAL_FEATURES = ['celery_gui']
 
   # TaskQueue server processes per core.
-  MULTIPLIER = 4
+  MULTIPLIER = 8
 
   # If we fail to get the number of processors we set our default number of
   # taskqueue servers to this value.
@@ -202,7 +202,7 @@ module TaskQueue
       start_cmd = "/usr/bin/python2 #{TASKQUEUE_SERVER_SCRIPT} -p #{port}"
       start_cmd << ' --verbose' if verbose
       stop_cmd = "/usr/bin/python2 #{APPSCALE_HOME}/scripts/stop_service.py " +
-                 "#{TASKQUEUE_SERVER_SCRIPT} /usr/bin/python2"
+                 "#{TASKQUEUE_SERVER_SCRIPT} #{port}"
       env_vars = {:PATH => '$PATH:/usr/local/bin'}
       MonitInterface.start(:taskqueue, start_cmd, stop_cmd, [port], env_vars,
                            start_cmd, nil, nil, nil)

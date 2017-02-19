@@ -5,6 +5,7 @@ require 'helperfunctions'
 require 'json'
 require 'net/http'
 require 'timeout'
+require 'taskqueue'
 
 # Number of seconds to wait before timing out when doing a remote call.
 # This number should be higher than the maximum time required for remote calls
@@ -96,16 +97,20 @@ class TaskQueueClient
     json_config = JSON.dump(config)
     response = nil
      
-    make_call(MAX_TIME_OUT, false, "reload_worker"){
-      url = URI.parse('http://' + @ip + ":#{SERVER_PORT}/reloadworker")
-      http = Net::HTTP.new(url.host, url.port)
-      response = http.post(url.path,
-                           json_config,
-                           {'Content-Type'=>'application/json'})
-    }
-    if response.nil?
-      return {"error" => true, "reason" => "Unable to get a response"}
-    end
+    ports = TaskQueue.get_server_ports()
+    
+    ports.each{ |port|
+      make_call(MAX_TIME_OUT, false, "reload_worker"){
+        url = URI.parse('http://' + @ip + ":#{port}/reloadworker")
+        http = Net::HTTP.new(url.host, url.port)
+        response = http.post(url.path,
+                            json_config,
+                            {'Content-Type'=>'application/json'})
+      } 
+     }
+#    if response.nil?
+#      return {"error" => true, "reason" => "Unable to get a response"}
+#    end
 
     return JSON.load(response.body)
   end

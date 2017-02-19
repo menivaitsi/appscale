@@ -19,11 +19,13 @@ from ..dbconstants import (AppScaleDBConnectionError,
                            MAX_GROUPS_FOR_XG,
                            MAX_TX_DURATION)
 from ..unpackaged import APPSCALE_PYTHON_APPSERVER
+from ..utils import tx_partition
 
 from cassandra.policies import FallthroughRetryPolicy
 from kazoo.exceptions import (NoNodeError,
                               KazooException,
                               ZookeeperError)
+from kazoo.retry import RetryFailedError
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import entity_pb
@@ -910,6 +912,9 @@ class ZKTransaction:
       self.run_with_retry(self.handle.delete, txpath, -1, True)
     except NoNodeError:
       return
+    except RetryFailedError:
+      raise ZKInternalException(
+        'Unable to remove transaction entry for {}'.format(txid))
 
 
   def release_lock(self, app_id, txid):
@@ -1479,7 +1484,7 @@ class ZKTransaction:
       else:
         mutations = cassandra_interface.mutations_for_entity(
           new_entity, txid, old_entity, composite_indices)
-      self.db_access.apply_mutations(mutations)
+      self.db_access.apply_mutations(mutations, txid)
 
   def resolve_batch(self, app, transaction):
     """ Check if batch completed and apply mutations if necessary.

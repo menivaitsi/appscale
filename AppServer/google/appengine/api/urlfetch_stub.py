@@ -390,8 +390,10 @@ class URLFetchServiceStub(apiproxy_stub.APIProxyStub):
 
         if _CONNECTION_SUPPORTS_TIMEOUT:
           connection = connection_class(host, timeout=deadline)
+          logging.info(">_ Retrieving URL: {} with deadline: {}".format(host, str(deadline)))
         else:
           connection = connection_class(host)
+          logging.info(">_ Retrieving URL: {}".format(host))
 
 
 

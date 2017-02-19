@@ -22,6 +22,7 @@ from queue import PullQueue
 from queue import PushQueue
 from task import Task
 from tq_config import TaskQueueConfig
+from .queue import TransientError
 from .unpackaged import APPSCALE_LIB_DIR
 from .unpackaged import APPSCALE_PYTHON_APPSERVER
 from .utils import logger
@@ -88,7 +89,7 @@ def create_pull_queue_tables(cluster, session):
       tag text,
       tag_exists boolean,
       PRIMARY KEY ((app, queue, eta), id)
-    )
+    ) WITH gc_grace_seconds = 120
   """
   statement = SimpleStatement(create_index_table, retry_policy=NO_RETRIES)
   try:
@@ -122,7 +123,7 @@ def create_pull_queue_tables(cluster, session):
       queue text,
       leased timestamp,
       PRIMARY KEY ((app, queue, leased))
-    )
+    ) WITH gc_grace_seconds = 120
   """
   statement = SimpleStatement(create_leases_table, retry_policy=NO_RETRIES)
   try:
@@ -425,6 +426,8 @@ class DistributedTaskQueue():
    
     log_file = self.LOG_DIR + app_id + ".log"
     celery_bin = find_executable('celery')
+    maxc = TaskQueueConfig.MAX_CELERY_CONCURRENCY if (app_id != 'appscaledashboard') else 5
+    minc = TaskQueueConfig.MIN_CELERY_CONCURRENCY if (app_id != 'appscaledashboard') else 5
     command = [celery_bin,
                "worker",
                "--app=" + \
@@ -434,8 +437,8 @@ class DistributedTaskQueue():
                "--logfile=" + log_file,
                "--time-limit=" + str(self.HARD_TIME_LIMIT),
                "--autoscale={max},{min}".format(
-                 max=TaskQueueConfig.MAX_CELERY_CONCURRENCY,
-                 min=TaskQueueConfig.MIN_CELERY_CONCURRENCY),
+                 max=maxc,
+                 min=minc),
                "--soft-time-limit=" + str(self.TASK_SOFT_TIME_LIMIT),
                "--pidfile=" + self.PID_FILE_LOC + 'celery___' + \
                              app_id + ".pid",
@@ -548,8 +551,13 @@ class DistributedTaskQueue():
     if request.has_tag():
       tag = request.tag()
 
-    tasks = queue.lease_tasks(request.max_tasks(), request.lease_seconds(),
-                              group_by_tag=request.group_by_tag(), tag=tag)
+    try:
+      tasks = queue.lease_tasks(request.max_tasks(), request.lease_seconds(),
+                                group_by_tag=request.group_by_tag(), tag=tag)
+    except TransientError as lease_error:
+      pb_error = taskqueue_service_pb.TaskQueueServiceError.TRANSIENT_ERROR
+      return response.Encode(), pb_error, str(lease_error)
+
     for task in tasks:
       task_pb = response.add_task()
       task_pb.MergeFrom(task.encode_lease_pb())
@@ -714,18 +722,23 @@ class DistributedTaskQueue():
       A apiproxy_errors.ApplicationError of TASK_ALREADY_EXISTS.
     """
     task_name = request.task_name()
+    start_time = datetime.datetime.utcnow()
     item = TaskName.get_by_key_name(task_name)
-    logger.debug("Task name {0}".format(task_name))
     if item:
-      logger.warning("Task already exists")
+      logger.warning("Task {} already exists [lookup time: {}]".format(
+        task_name, str(datetime.datetime.utcnow() - start_time)))
       raise apiproxy_errors.ApplicationError(
         taskqueue_service_pb.TaskQueueServiceError.TASK_ALREADY_EXISTS)
     else:
+      logger.debug("Task name {} [lookup time: {}]".format(task_name,
+        str(datetime.datetime.utcnow() - start_time)))
+      start_time = datetime.datetime.utcnow()
       new_name = TaskName(key_name=task_name, state=tq_lib.TASK_STATES.QUEUED,
         queue=request.queue_name(), app_id=request.app_id())
-      logger.debug("Creating entity {0}".format(str(new_name)))
       try:
         db.put(new_name)
+        logger.debug("Created entity {} [time elapsed: {}]".format(
+          str(new_name), str(datetime.datetime.utcnow() - start_time)))
       except datastore_errors.InternalError, internal_error:
         logger.error(str(internal_error))
         raise apiproxy_errors.ApplicationError(
