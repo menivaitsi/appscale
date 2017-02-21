@@ -3092,7 +3092,7 @@ class Djinn
     Nginx.create_uaserver_config(my_node.private_ip)
   end
 
-  def configure_db_nginx()
+  def configure_db_haproxy()
     all_db_private_ips = []
     @nodes.each { | node |
       if node.is_db_master? or node.is_db_slave?
@@ -3101,7 +3101,6 @@ class Djinn
     }
 #    Nginx.create_datastore_server_config(all_db_private_ips, DatastoreServer::PROXY_PORT)
     HAProxy.create_datastore_server_config(all_db_private_ips, my_node.private_ip, DatastoreServer::PROXY_PORT)
-
   end
 
   # Creates HAProxy configuration for the TaskQueue REST API.
@@ -4647,8 +4646,9 @@ HOSTS
     if my_node.is_shadow? and not my_node.is_appengine?
       write_app_logrotate()
       Djinn.log_info("Copying logrotate script for centralized app logs")
+      configure_db_haproxy
+      Djinn.log_info("DB HAProxy configured")
     end
-    configure_db_nginx
     write_locations
 
     update_hosts_info

@@ -79,9 +79,6 @@ TRUSTED_FLAG = "--trusted"
 # The location on the filesystem where the PHP executable is installed.
 PHP_CGI_LOCATION = "/usr/bin/php-cgi"
 
-# Load balancing path for datastore.
-DATASTORE_PATH = "localhost"
-
 # The location of the App Engine SDK for Go.
 GO_SDK = os.path.join('/', 'opt', 'go_appengine')
 
@@ -569,7 +566,6 @@ def create_python27_start_cmd(app_name,
   Returns:
     A string of the start command.
   """
-  db_location = DATASTORE_PATH
   cmd = [
     "/usr/bin/python2",
     constants.APPSCALE_HOME + "/AppServer/dev_appserver.py",
@@ -584,7 +580,7 @@ def create_python27_start_cmd(app_name,
     "--php_executable_path=" + str(PHP_CGI_LOCATION),
     "--uaserver_path " + db_location + ":"\
       + str(constants.UA_SERVER_PORT),
-    "--datastore_path " + db_location + ":"\
+    "--datastore_path " + str(load_balancer_host) + ":"\
       + str(constants.DB_SERVER_PORT),
     "/var/apps/" + app_name + "/app",
     "--host " + appscale_info.get_private_ip(),
