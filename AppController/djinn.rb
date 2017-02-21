@@ -4315,7 +4315,7 @@ class Djinn
       memcache_ips << node.private_ip if node.is_memcache?
       search_ips << node.private_ip if node.is_search?
       slave_ips << node.private_ip if node.is_db_slave?
-      taskqueue_ips << node.private_ip if node.is_load_balancer?
+      taskqueue_ips << node.private_ip if node.is_taskqueue_master? || node.is_taskqueue_slave?
     }
     slave_ips << master_ips[0] if slave_ips.empty?
 
@@ -4340,10 +4340,11 @@ class Djinn
       # For the taskqueue, let's shuffle the entries, and then put
       # ourselves as first option, if we are a taskqueue node.
       taskqueue_ips.shuffle!
-      if my_node.is_taskqueue_master? || my_node.is_taskqueue_slave?
-        taskqueue_ips.delete(my_private)
-        taskqueue_ips.unshift(my_private)
-      end
+#      if my_node.is_taskqueue_master? || my_node.is_taskqueue_slave?
+#        taskqueue_ips.delete(my_private)
+#        taskqueue_ips.unshift(my_private)
+#      end
+      taskqueue_ips.unshift(load_balancer_ips)
       taskqueue_content = taskqueue_ips.join("\n") + "\n"
 
       head_node_private_ip = get_shadow.private_ip
