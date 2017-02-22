@@ -3957,18 +3957,21 @@ class Djinn
 
   def start_datastore_server
     db_master_ip = nil
+    loadbalancer_ip = nil
     verbose = @options['verbose'].downcase == 'true'
     @nodes.each { |node|
       db_master_ip = node.private_ip if node.is_db_master?
+      loadbalancer_ip = node.private_ip if node.is_load_balancer?
     }
     HelperFunctions.log_and_crash("db master ip was nil") if db_master_ip.nil?
+    HelperFunctions.log_and_crash("loadbalancer ip was nil") if loadbalancer_ip.nil?
 
     table = @options['table']
     DatastoreServer.start(db_master_ip, my_node.private_ip, table, verbose)
 #    HAProxy.create_datastore_server_config(my_node.private_ip, DatastoreServer::PROXY_PORT, table)
 
     # Let's wait for the datastore to be active.
-    HelperFunctions.sleep_until_port_is_open(my_node.private_ip, DatastoreServer::PROXY_PORT)
+    HelperFunctions.sleep_until_port_is_open(loadbalancer_ip, DatastoreServer::PROXY_PORT)
   end
 
   # Starts the Log Server service on this machine
