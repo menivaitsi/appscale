@@ -704,6 +704,7 @@ def create_java_start_cmd(app_name, port, load_balancer_host, max_heap):
     A string of the start command.
   """
   db_location = DATASTORE_PATH
+  tq_proxy = appscale_info.get_tq_proxy()
 
   # The Java AppServer needs the NGINX_PORT flag set so that it will read the
   # local FS and see what port it's running on. The value doesn't matter.
@@ -723,6 +724,7 @@ def create_java_start_cmd(app_name, port, load_balancer_host, max_heap):
     "--APP_NAME=" + app_name,
     "--NGINX_ADDRESS=" + load_balancer_host,
     "--NGINX_PORT=anything",
+    "--TQ_PROXY=" + tq_proxy,
     os.path.dirname(locate_dir("/var/apps/" + app_name + "/app/", "WEB-INF"))
   ]
 
