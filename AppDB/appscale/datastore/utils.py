@@ -1,3 +1,4 @@
+import datetime
 import itertools
 import logging
 import mmh3
@@ -13,13 +14,21 @@ from .dbconstants import AppScaleDBConnectionError
 from .dbconstants import ID_KEY_LENGTH
 from .dbconstants import METADATA_TABLE
 from .dbconstants import TERMINATING_STRING
-from .unpackaged import APPSCALE_PYTHON_APPSERVER
+from .unpackaged import (APPSCALE_LIB_DIR,
+                         APPSCALE_PYTHON_APPSERVER)
+
+sys.path.append(APPSCALE_LIB_DIR)
+from constants import LOG_FORMAT
 
 sys.path.append(APPSCALE_PYTHON_APPSERVER)
 from google.appengine.datastore import appscale_stub_util
 from google.appengine.datastore import datastore_pb
 from google.appengine.datastore import entity_pb
 from google.appengine.datastore import sortable_pb_encoder
+
+
+logging.basicConfig(format=LOG_FORMAT, level=logging.INFO)
+logger = logging.getLogger('appscale-datastore')
 
 
 def clean_app_id(app_id):
@@ -620,3 +629,18 @@ def create_key(app, namespace, path):
   key_path = key.mutable_path()
   key_path.MergeFromString(path)
   return key
+
+
+def get_write_time(txid):
+  """ Get the timestamp the datastore should use to write entity data.
+
+  Args:
+    txid: An integer specifying a transaction ID.
+  Returns:
+    An integer specifying a timestamp to use (in microseconds from unix epoch).
+  """
+  # Try to prevent future writes from getting buried under past writes.
+  epoch = datetime.datetime.utcfromtimestamp(0)
+  offset = datetime.datetime(2022, 2, 1) - epoch
+  usec_offset = offset.total_seconds() * 1000000
+  return int(usec_offset + txid)
