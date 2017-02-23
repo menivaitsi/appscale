@@ -3096,14 +3096,15 @@ class Djinn
     Nginx.create_uaserver_config(my_node.private_ip)
   end
 
-  def configure_db_nginx()
+  def configure_db_haproxy()
     all_db_private_ips = []
     @nodes.each { | node |
       if node.is_db_master? or node.is_db_slave?
         all_db_private_ips.push(node.private_ip)
       end
     }
-    Nginx.create_datastore_server_config(all_db_private_ips, DatastoreServer::PROXY_PORT)
+    HAProxy.create_datastore_server_config(
+      all_db_private_ips, my_node.private_ip, DatastoreServer::PROXY_PORT)
   end
 
   # Creates HAProxy configuration for TaskQueue.
@@ -4006,18 +4007,20 @@ class Djinn
 
   def start_datastore_server
     db_master_ip = nil
+    db_proxy = nil
     verbose = @options['verbose'].downcase == 'true'
     @nodes.each { |node|
       db_master_ip = node.private_ip if node.is_db_master?
+      db_proxy = node.private_ip if node.is_shadow?
     }
     HelperFunctions.log_and_crash("db master ip was nil") if db_master_ip.nil?
+    HelperFunctions.log_and_crash("db proxy ip was nil") if db_proxy.nil?
 
     table = @options['table']
     DatastoreServer.start(db_master_ip, my_node.private_ip, table, verbose)
-    HAProxy.create_datastore_server_config(my_node.private_ip, DatastoreServer::PROXY_PORT, table)
 
-    # Let's wait for the datastore to be active.
-    HelperFunctions.sleep_until_port_is_open(my_node.private_ip, DatastoreServer::PROXY_PORT)
+    # Let's wait for at least one datastore server to be active.
+    HelperFunctions.sleep_until_port_is_open(db_proxy, DatastoreServer::PROXY_PORT)
   end
 
   # Starts the Log Server service on this machine
@@ -4695,8 +4698,9 @@ HOSTS
     if my_node.is_shadow? and not my_node.is_appengine?
       write_app_logrotate()
       Djinn.log_info("Copying logrotate script for centralized app logs")
+      configure_db_haproxy
+      Djinn.log_info("DB HAProxy configured")
     end
-    configure_db_nginx
     write_locations
 
     update_hosts_info
