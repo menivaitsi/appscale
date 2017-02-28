@@ -3902,7 +3902,7 @@ class Djinn
   def start_blobstore_server()
     # Each node has an nginx configuration to reach the datastore. Use it
     # to make sure we are fault-tolerant.
-    BlobServer.start(my_node.private_ip, DatastoreServer::LISTEN_PORT_NO_SSL)
+    BlobServer.start(my_node.private_ip, DatastoreServer::PROXY_PORT)
     return true
   end
 
