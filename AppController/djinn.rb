@@ -4700,9 +4700,13 @@ HOSTS
     if my_node.is_shadow? and not my_node.is_appengine?
       write_app_logrotate()
       Djinn.log_info("Copying logrotate script for centralized app logs")
+    end
+
+    if my_node.is_load_balancer?
       configure_db_haproxy
       Djinn.log_info("DB HAProxy configured")
     end
+
     write_locations
 
     update_hosts_info
