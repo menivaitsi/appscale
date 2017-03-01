@@ -200,8 +200,8 @@ public class AppScaleTaskQueueClient {
     }
 
     private String getTaskQueueProxy() {
-        String nginxHost = System.getProperty("TQ_PROXY");
-        return nginxHost;
+        String tqProxy = System.getProperty("TQ_PROXY");
+        return tqProxy;
     }
 
     private byte[] inputStreamToArray(InputStream in) {
